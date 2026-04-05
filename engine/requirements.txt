@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+paddleocr
+paddlepaddle
+pypdfium2
+langchain
+langchain-core
+langchain-ollama
+pydantic
+python-multipart
+pika
+spacy
+tenacity
+structlog

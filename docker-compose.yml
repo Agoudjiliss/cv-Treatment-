@@ -1,0 +1,145 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: cv-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-cvuser}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-cvpass}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+    networks:
+      - cv-net
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: cv-ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: 30m
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    networks:
+      - cv-net
+
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-lc"]
+    command: "ollama pull ${OLLAMA_MODEL:-llama3.2:3b}"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    restart: "no"
+    networks:
+      - cv-net
+
+  elasticsearch:
+    image: elasticsearch:8.13.0
+    container_name: cv-elasticsearch
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+    networks:
+      - cv-net
+
+  engine:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    container_name: cv-engine
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      OLLAMA_TIMEOUT_SECONDS: 300
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-cvuser}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-cvpass}
+      CV_PARSE_QUEUE: cv_parse_queue
+      CV_RESULT_QUEUE: cv_result_queue
+      ENABLE_RABBIT_CONSUMER: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+    networks:
+      - cv-net
+
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: cv-gateway
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-cvuser}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-cvpass}
+      CV_PARSE_QUEUE: cv_parse_queue
+      CV_RESULT_QUEUE: cv_result_queue
+      CV_DLQ_QUEUE: cv_parse_dlq
+      CV_PARSE_TIMEOUT_SECONDS: 420
+      CV_ENGINE_HEALTH_URL: http://engine:8000/health/ready
+      PYTHON_ENGINE_BASE_URL: http://engine:8000
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ENABLE_CV_INDEX: "true"
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+    ports:
+      - "8080:8080"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      engine:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    networks:
+      - cv-net
+
+volumes:
+  es_data:
+  ollama:
+
+networks:
+  cv-net:
