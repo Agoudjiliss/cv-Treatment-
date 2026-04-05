@@ -22,6 +22,10 @@ services:
     container_name: cv-ollama
     environment:
       OLLAMA_KEEP_ALIVE: 30m
+      # CPU VM (e.g. 4 vCPU): use all cores for llama.cpp; one model loaded at a time.
+      OLLAMA_NUM_THREAD: "4"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
     ports:
       - "11434:11434"
     volumes:
@@ -74,8 +78,17 @@ services:
       dockerfile: Dockerfile
     container_name: cv-engine
     environment:
+      # 2 workers: each loads PaddleOCR — safer on 16GB RAM than 4× duplicate models.
+      UVICORN_WORKERS: "2"
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      RABBITMQ_PREFETCH: "2"
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      OLLAMA_NUM_PREDICT: "1400"
+      OLLAMA_LLAMA_NUM_THREAD: "4"
+      OLLAMA_NUM_CTX: "8192"
       OLLAMA_TIMEOUT_SECONDS: 300
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672

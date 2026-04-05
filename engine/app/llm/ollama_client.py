@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from urllib import request
@@ -26,6 +27,7 @@ Return ONLY a valid JSON object matching this exact schema (no markdown, no prea
 Rules:
 - If a field is not found: use null for strings and [] for arrays.
 - Do not invent information not present in the text.
+- Keep each experience "description" brief (max ~2 lines); omit filler.
 - Certifications: capture certificate name/title, institution/issuer, and expiration/valid-until date if present.
 - Projects: list notable projects with technologies and URL if present.
 
@@ -101,12 +103,22 @@ class OllamaClient:
             raise RuntimeError("Circuit breaker is open for Ollama")
         try:
             prompt = STRUCTURE_PROMPT_TEMPLATE.format(raw_text=raw_text)
+            num_predict = int(os.getenv("OLLAMA_NUM_PREDICT", "1400"))
+            num_thread = int(os.getenv("OLLAMA_LLAMA_NUM_THREAD", os.getenv("OLLAMA_NUM_THREAD", "4")))
+            num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
+            options: dict = {
+                "num_predict": num_predict,
+                "temperature": 0,
+                "top_p": 0.9,
+                "num_thread": max(1, num_thread),
+                "num_ctx": max(2048, num_ctx),
+            }
             payload = {
                 "model": self._model_name,
                 "prompt": prompt,
                 "format": "json",
                 "stream": False,
-                "options": {"num_predict": 600, "temperature": 0, "top_p": 0.9},
+                "options": options,
             }
             req = request.Request(
                 url=f"{self._base_url}/api/generate",

@@ -63,7 +63,8 @@ def _consume_loop(ocr_engine: OcrEngine, llm_extractor: LlmExtractor) -> None:
     channel.queue_declare(queue=result_queue, durable=True)
     channel.queue_declare(queue=dlq_queue, durable=True)
     channel.queue_bind(queue=dlq_queue, exchange=exchange, routing_key=dlq_queue)
-    channel.basic_qos(prefetch_count=5)
+    prefetch = int(os.getenv("RABBITMQ_PREFETCH", "2"))
+    channel.basic_qos(prefetch_count=max(1, prefetch))
 
     def on_message(ch, method, _, body: bytes) -> None:
         correlation_id = ""
