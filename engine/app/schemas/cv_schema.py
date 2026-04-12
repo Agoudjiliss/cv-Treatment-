@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class Contact(BaseModel):
@@ -14,35 +14,60 @@ class Contact(BaseModel):
 
 
 class EducationItem(BaseModel):
-    degree: str | None = None
+    """HR DTO: diplôme / formation."""
+
     institution: str | None = None
-    year: str | None = None
+    establishment: str | None = None
+    typeEducation: str | None = None
+    dateGraduation: int | str | None = None
 
 
 class ExperienceItem(BaseModel):
-    title: str | None = None
+    """HR DTO: expérience professionnelle."""
+
+    role: str | None = None
     company: str | None = None
-    duration: str | None = None
+    location: str | None = None
+    startDate: str | None = None
+    endDate: str | None = None
     description: str | None = None
+
+
+class LanguageProficiency(BaseModel):
+    language: str | None = None
+    proficiency: str | None = None
 
 
 class Skills(BaseModel):
+    """
+    HR DTO: niveau global, référentiel, langues structurées.
+    technical / soft restent pour compatibilité et scoring explain.
+    """
+
+    score: str | None = None
+    catalog_id: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("catalogId", "catalog_id"),
+        serialization_alias="catalogId",
+    )
+    languages: List[LanguageProficiency] = Field(default_factory=list)
     technical: List[str] = Field(default_factory=list)
     soft: List[str] = Field(default_factory=list)
-    languages: List[str] = Field(default_factory=list)
 
 
 class CertificationItem(BaseModel):
-    name: str | None = None
-    institution: str | None = None
-    expiration: str | None = None
-
-
-class ProjectItem(BaseModel):
-    name: str | None = None
+    title: str | None = None
+    issuer: str | None = None
+    issueDate: str | None = None
+    expiryDate: str | None = None
     description: str | None = None
-    technologies: List[str] = Field(default_factory=list)
-    url: str | None = None
+
+
+class AchievementItem(BaseModel):
+    projectName: str | None = None
+    description: str | None = None
+    startDate: str | None = None
+    endDate: str | None = None
 
 
 class CvExtractionResult(BaseModel):
@@ -50,7 +75,7 @@ class CvExtractionResult(BaseModel):
     education: List[EducationItem] = Field(default_factory=list)
     experience: List[ExperienceItem] = Field(default_factory=list)
     certifications: List[CertificationItem] = Field(default_factory=list)
-    projects: List[ProjectItem] = Field(default_factory=list)
+    achievement: List[AchievementItem] = Field(default_factory=list)
     skills: Skills = Field(default_factory=Skills)
     summary: str | None = None
     confidence: float = 0.0

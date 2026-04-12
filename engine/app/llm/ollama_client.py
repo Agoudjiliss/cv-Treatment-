@@ -11,25 +11,72 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-STRUCTURE_PROMPT_TEMPLATE = """You are a CV parser.
+STRUCTURE_PROMPT_TEMPLATE = """You are a CV parser for an HR system.
 Return ONLY a valid JSON object matching this exact schema (no markdown, no preamble):
 
 {{
   "contact": {{"name": "", "email": "", "phone": "", "linkedin": "", "location": ""}},
-  "education": [{{"degree": "", "institution": "", "year": ""}}],
-  "experience": [{{"title": "", "company": "", "duration": "", "description": ""}}],
-  "certifications": [{{"name": "", "institution": "", "expiration": ""}}],
-  "projects": [{{"name": "", "description": "", "technologies": [], "url": ""}}],
-  "skills": {{"technical": [], "soft": [], "languages": []}},
+  "education": [
+    {{
+      "institution": "",
+      "establishment": "",
+      "typeEducation": null,
+      "dateGraduation": null
+    }}
+  ],
+  "experience": [
+    {{
+      "role": "",
+      "company": "",
+      "location": "",
+      "startDate": "",
+      "endDate": "",
+      "description": ""
+    }}
+  ],
+  "certifications": [
+    {{
+      "title": "",
+      "issuer": "",
+      "issueDate": "",
+      "expiryDate": "",
+      "description": ""
+    }}
+  ],
+  "achievement": [
+    {{
+      "projectName": "",
+      "description": "",
+      "startDate": null,
+      "endDate": null
+    }}
+  ],
+  "skills": {{
+    "score": null,
+    "catalogId": null,
+    "languages": [{{"language": "", "proficiency": null}}],
+    "technical": [],
+    "soft": []
+  }},
   "summary": ""
 }}
 
+Enums (use EXACTLY one of these strings, or null if unknown):
+- education[].typeEducation: LICENCE | MASTER | DOCTORAT | INGENIEUR | BTS | DUT | FORMATION_PROFESSIONNELLE
+- skills.score: BASIC | INTERMEDIATE | ADVANCED | EXPERT
+- skills.languages[].proficiency: A1 | A2 | B1 | B2 | C1 | C2 | NATIVE
+- skills.languages[].language: prefer uppercase locale keys when clear, e.g. FRENCH, ARABIC, ENGLISH
+
 Rules:
-- If a field is not found: use null for strings and [] for arrays.
+- dateGraduation: graduation year as integer (e.g. 2023) when a single year is clear; else null.
+- Dates for experience/achievement: use DD/MM/YYYY when day is known, else month/year or year as in the CV.
+- If a field is not found: use null for scalars and [] for arrays.
 - Do not invent information not present in the text.
 - Keep each experience "description" brief (max ~2 lines); omit filler.
-- Certifications: capture certificate name/title, institution/issuer, and expiration/valid-until date if present.
-- Projects: list notable projects with technologies and URL if present.
+- certifications.description: short optional note if the CV provides one.
+- achievement: notable projects (replace old "projects"); put tech stack in description if no separate field.
+- skills.catalogId: integer ID only if explicitly stated in the CV; otherwise null.
+- skills.technical / skills.soft: keyword lists as before.
 
 RAW CV TEXT:
 {raw_text}

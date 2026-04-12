@@ -52,18 +52,109 @@ class LlmExtractor:
             payload["certifications"] = []
         elif isinstance(certifications, dict):
             payload["certifications"] = [certifications]
+        for cert in payload["certifications"]:
+            if not isinstance(cert, dict):
+                continue
+            if cert.get("title") is None and cert.get("name"):
+                cert["title"] = cert["name"]
+            if cert.get("issuer") is None and cert.get("institution"):
+                cert["issuer"] = cert["institution"]
+            if cert.get("expiryDate") is None and cert.get("expiration"):
+                cert["expiryDate"] = cert["expiration"]
 
-        projects = payload.get("projects")
-        if projects is None:
-            payload["projects"] = []
-        elif isinstance(projects, dict):
-            payload["projects"] = [projects]
+        achievement = payload.get("achievement")
+        if achievement is None and payload.get("projects") is not None:
+            achievement = payload.get("projects")
+        if achievement is None:
+            achievement = []
+        elif isinstance(achievement, dict):
+            achievement = [achievement]
+        payload["achievement"] = self._normalize_achievements(achievement)
+        payload.pop("projects", None)
+
+        for edu in payload.get("education") or []:
+            if not isinstance(edu, dict):
+                continue
+            if edu.get("dateGraduation") is None and edu.get("year") is not None:
+                y = self._coerce_graduation_year(edu.get("year"))
+                if y is not None:
+                    edu["dateGraduation"] = y
+
+        for exp in payload.get("experience") or []:
+            if not isinstance(exp, dict):
+                continue
+            if exp.get("role") is None and exp.get("title"):
+                exp["role"] = exp["title"]
+            if exp.get("startDate") is None and exp.get("duration"):
+                exp["startDate"] = str(exp["duration"]).strip() or None
 
         skills = payload.get("skills")
         if isinstance(skills, dict):
-            for key in ("technical", "soft", "languages"):
+            for key in ("technical", "soft"):
                 skills[key] = self._normalize_string_list(skills.get(key))
+            skills["languages"] = self._normalize_language_proficiencies(skills.get("languages"))
+            cid = skills.get("catalogId")
+            if cid is not None and isinstance(cid, str) and cid.strip().isdigit():
+                skills["catalogId"] = int(cid.strip())
         return payload
+
+    def _coerce_graduation_year(self, value) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, int) and 1900 <= value <= 2100:
+            return value
+        text = str(value).strip()
+        if not text:
+            return None
+        m = re.search(r"\b(19\d{2}|20\d{2})\b", text)
+        if m:
+            return int(m.group(1))
+        return None
+
+    def _normalize_achievements(self, items: list) -> list[dict]:
+        out: list[dict] = []
+        for raw in items:
+            if not isinstance(raw, dict):
+                continue
+            item = dict(raw)
+            if item.get("projectName") is None and item.get("name"):
+                item["projectName"] = item["name"]
+            desc = item.get("description") or ""
+            tech = item.get("technologies")
+            if tech and isinstance(tech, list):
+                extra = ", ".join(str(t) for t in tech if t)
+                if extra:
+                    item["description"] = (desc + " " if desc else "") + f"Technologies: {extra}.".strip()
+            url = item.get("url")
+            if url and str(url).strip():
+                base = item.get("description") or ""
+                item["description"] = (base + " " if base else "") + f"URL: {url}".strip()
+            if item.get("projectName") or item.get("description"):
+                out.append(item)
+        return out
+
+    def _normalize_language_proficiencies(self, values) -> list[dict]:
+        if values is None:
+            return []
+        if not isinstance(values, list):
+            values = [values]
+        out: list[dict] = []
+        for item in values:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    out.append({"language": text, "proficiency": None})
+                continue
+            if isinstance(item, dict):
+                lang = item.get("language") or item.get("name") or item.get("label")
+                if isinstance(lang, str) and lang.strip():
+                    out.append(
+                        {
+                            "language": lang.strip(),
+                            "proficiency": item.get("proficiency"),
+                        }
+                    )
+        return out
 
     def _normalize_string_list(self, values) -> list[str]:
         if values is None:

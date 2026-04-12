@@ -10,6 +10,13 @@ from app.schemas import CvExtractionResult
 
 
 def compute_confidence(cv: CvExtractionResult) -> float:
+    skill_signal = bool(
+        cv.skills.technical
+        or cv.skills.soft
+        or cv.skills.languages
+        or (cv.skills.score and cv.skills.score.strip())
+        or cv.skills.catalog_id is not None
+    )
     filled = sum(
         [
             bool(cv.contact.name),
@@ -18,11 +25,12 @@ def compute_confidence(cv: CvExtractionResult) -> float:
             bool(cv.contact.location),
             bool(cv.education),
             bool(cv.experience),
-            bool(cv.skills.technical),
+            skill_signal,
             bool(cv.summary),
+            bool(cv.achievement or cv.certifications),
         ]
     )
-    return round(filled / 8, 2)
+    return round(filled / 9, 2)
 
 
 def run_cv_pipeline(pdf_bytes: bytes, ocr_engine: OcrEngine, llm_extractor: LlmExtractor) -> CvExtractionResult:
