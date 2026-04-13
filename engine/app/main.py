@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import threading
 from contextlib import asynccontextmanager
@@ -11,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.extractor import LlmExtractor
 from app.ocr import OcrEngine
-from app.pipeline import run_cv_pipeline
+from app.pipeline import run_cv_pipeline_async
 from app import rabbit_worker
 from app.routers import explain_router
 from app.schemas import CvExtractionResult
@@ -74,8 +73,7 @@ async def process(file: UploadFile = File(...)) -> JSONResponse:
         raise HTTPException(status_code=413, detail="File exceeds maximum size of 10MB")
 
     try:
-        result = run_cv_pipeline(pdf_bytes, ocr_engine, llm_extractor)
-        validated = CvExtractionResult.model_validate(result.model_dump(by_alias=True))
-        return JSONResponse(content=validated.model_dump(by_alias=True))
+        result = await run_cv_pipeline_async(pdf_bytes, ocr_engine, llm_extractor)
+        return JSONResponse(content=result.model_dump(by_alias=True))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"CV pipeline failed: {exc}") from exc

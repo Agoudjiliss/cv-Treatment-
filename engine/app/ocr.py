@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pypdfium2 as pdfium
@@ -53,38 +54,55 @@ class OcrEngine:
             pdf_path.write_bytes(pdf_bytes)
 
             pdf = pdfium.PdfDocument(str(pdf_path))
-            pages_text: list[str] = []
+            num_pages = len(pdf)
+            pages_text: list[str | None] = [None] * num_pages
+            ocr_tasks: list[tuple[int, Path]] = []
+
             try:
-                for page_index in range(len(pdf)):
+                for page_index in range(num_pages):
                     page = pdf[page_index]
                     native_text = self._extract_native_text(page)
                     if native_text:
-                        pages_text.append(native_text)
+                        pages_text[page_index] = native_text
                         continue
 
-                    bitmap = page.render(scale=1.5)
+                    bitmap = page.render(scale=1.0)
                     pil_image = bitmap.to_pil()
                     image_path = tmp_path / f"page-{page_index + 1}.png"
                     pil_image.save(image_path, format="PNG")
-
-                    try:
-                        ocr = self._get_ocr()
-                        ocr_result = self._run_ocr(ocr, str(image_path))
-                    except Exception as exc:
-                        raise RuntimeError(f"PaddleOCR failed on page {page_index + 1}") from exc
-                    pairs = ocr_lines_from_result(ocr_result)
-                    page_text = sort_reading_order(pairs)
-                    if page_text:
-                        pages_text.append(page_text)
-                    else:
-                        pages_text.append(extract_text_fallback(ocr_result))
+                    ocr_tasks.append((page_index, image_path))
             finally:
                 pdf.close()
 
-            text = "\n\n".join(pages_text).strip()
-            if not text:
+            if ocr_tasks:
+                ocr = self._get_ocr()
+                max_workers = min(len(ocr_tasks), 4)
+
+                def _ocr_page(task: tuple[int, Path]) -> tuple[int, str]:
+                    idx, img = task
+                    result = self._run_ocr(ocr, str(img))
+                    pairs = ocr_lines_from_result(result)
+                    text = sort_reading_order(pairs) or extract_text_fallback(result)
+                    return idx, text
+
+                if len(ocr_tasks) == 1:
+                    idx, text = _ocr_page(ocr_tasks[0])
+                    pages_text[idx] = text
+                else:
+                    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                        futures = {pool.submit(_ocr_page, t): t[0] for t in ocr_tasks}
+                        for future in as_completed(futures):
+                            idx = futures[future]
+                            try:
+                                _, text = future.result()
+                                pages_text[idx] = text
+                            except Exception as exc:
+                                raise RuntimeError(f"PaddleOCR failed on page {idx + 1}") from exc
+
+            final = "\n\n".join(t for t in pages_text if t).strip()
+            if not final:
                 raise RuntimeError("PaddleOCR produced empty text")
-            return text
+            return final
 
     def _extract_native_text(self, page) -> str:
         try:
@@ -97,7 +115,7 @@ class OcrEngine:
                 text = str(text_page.get_text_range()).strip()
             elif hasattr(text_page, "get_text_bounded"):
                 text = str(text_page.get_text_bounded()).strip()
-            if len(text) < 80:
+            if len(text) < 40:
                 return ""
             if not self._looks_readable_native_text(text):
                 return ""

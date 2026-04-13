@@ -12,7 +12,6 @@ import pika
 from app.extractor import LlmExtractor
 from app.ocr import OcrEngine
 from app.pipeline import run_cv_pipeline
-from app.schemas import CvExtractionResult
 
 if TYPE_CHECKING:
     pass
@@ -76,11 +75,10 @@ def _consume_loop(ocr_engine: OcrEngine, llm_extractor: LlmExtractor) -> None:
                 raise ValueError("correlationId and pdfBase64 are required")
             pdf_bytes = base64.b64decode(pdf_b64)
             result = run_cv_pipeline(pdf_bytes, ocr_engine, llm_extractor)
-            validated = CvExtractionResult.model_validate(result.model_dump(by_alias=True))
             payload = {
                 "correlationId": correlation_id,
                 "status": "ok",
-                "result": validated.model_dump(by_alias=True),
+                "result": result.model_dump(by_alias=True),
                 "error": None,
             }
             ch.basic_publish(
