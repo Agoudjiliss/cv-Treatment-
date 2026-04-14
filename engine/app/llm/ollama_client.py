@@ -106,10 +106,28 @@ SKILLS_CATALOG = (
     "220:Wholesale Access Regulations|221:Workforce Management"
 )
 
-STRUCTURE_PROMPT_TEMPLATE = """CV parser. Return ONLY valid JSON, no markdown.
-Schema: {{"contact":{{"name":"","email":"","phone":"","linkedin":"","location":""}},"education":[{{"institution":"","establishment":"","typeEducation":null,"dateGraduation":null}}],"experience":[{{"role":"","company":"","location":"","startDate":"","endDate":"","description":""}}],"certifications":[{{"title":"","issuer":"","issueDate":"","expiryDate":"","description":""}}],"achievement":[{{"projectName":"","description":"","startDate":null,"endDate":null}}],"skills":{{"technical":["skill1","skill2"],"soft":["skill1"],"languages":[{{"language":"ENGLISH","proficiency":"B2"}}]}},"summary":""}}
-Enums (or null): typeEducation=LICENCE|MASTER|DOCTORAT|INGENIEUR|BTS|DUT|FORMATION_PROFESSIONNELLE; proficiency=A1|A2|B1|B2|C1|C2|NATIVE; language=FRENCH|ARABIC|ENGLISH|SPANISH|GERMAN etc.
-Rules: dateGraduation=year int (e.g. 2023). Dates DD/MM/YYYY when possible. null for missing scalars, [] for missing arrays. No invention. Brief descriptions. List all technical and soft skills found in the CV as free-text strings.
+STRUCTURE_PROMPT_TEMPLATE = """Extract ALL information from the CV below into valid JSON. No markdown, no commentary.
+You MUST populate every field that exists in the CV. Do NOT return empty arrays if data is present.
+
+Schema:
+{{"contact":{{"name":"","email":"","phone":"","linkedin":"","location":""}},
+"education":[{{"institution":"","establishment":"","typeEducation":null,"dateGraduation":null}}],
+"experience":[{{"role":"","company":"","location":"","startDate":"","endDate":"","description":""}}],
+"certifications":[{{"title":"","issuer":"","issueDate":"","expiryDate":"","description":""}}],
+"achievement":[{{"projectName":"","description":"","startDate":null,"endDate":null}}],
+"skills":{{"technical":["Java","Python"],"soft":["Problem Solving"],"languages":[{{"language":"ENGLISH","proficiency":"B2"}}]}},
+"summary":""}}
+
+IMPORTANT:
+- Extract EVERY work experience, project, skill, and language from the CV.
+- technical skills: programming languages, frameworks, tools, databases.
+- soft skills: leadership, communication, teamwork, etc.
+- location = physical address/city, NOT email.
+- typeEducation: LICENCE|MASTER|DOCTORAT|INGENIEUR|BTS|DUT|FORMATION_PROFESSIONNELLE or null.
+- proficiency: A1|A2|B1|B2|C1|C2|NATIVE.
+- dateGraduation: year as integer (e.g. 2023).
+- Dates: DD/MM/YYYY. null for missing values. [] only for truly empty arrays.
+- summary: 1-2 sentence professional summary.
 
 CV TEXT:
 {raw_text}
@@ -213,7 +231,7 @@ class OllamaClient:
             raise RuntimeError("Circuit breaker is open for Ollama")
         try:
             prompt = STRUCTURE_PROMPT_TEMPLATE.format(raw_text=raw_text)
-            num_predict = int(os.getenv("OLLAMA_NUM_PREDICT", "1024"))
+            num_predict = int(os.getenv("OLLAMA_NUM_PREDICT", "1536"))
             num_thread = int(os.getenv("OLLAMA_LLAMA_NUM_THREAD", os.getenv("OLLAMA_NUM_THREAD", "4")))
             num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
             payload = {
