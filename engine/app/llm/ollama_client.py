@@ -211,12 +211,12 @@ class OllamaClient:
         return json.loads(raw)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8), reraise=True)
-    def call_structured_cv(self, raw_text: str) -> str:
+    def call_structured_cv(self, raw_text: str, *, num_predict: int | None = None) -> str:
         if self._breaker.is_open():
             raise RuntimeError("Circuit breaker is open for Ollama")
         try:
             prompt = STRUCTURE_PROMPT_TEMPLATE.format(raw_text=raw_text, skills_catalog=SKILLS_CATALOG)
-            num_predict = int(os.getenv("OLLAMA_NUM_PREDICT", "900"))
+            resolved_num_predict = num_predict if num_predict is not None else int(os.getenv("OLLAMA_NUM_PREDICT", "900"))
             num_thread = int(os.getenv("OLLAMA_LLAMA_NUM_THREAD", os.getenv("OLLAMA_NUM_THREAD", "4")))
             num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
             payload = {
@@ -225,7 +225,7 @@ class OllamaClient:
                 "format": "json",
                 "stream": False,
                 "options": {
-                    "num_predict": num_predict,
+                    "num_predict": resolved_num_predict,
                     "temperature": 0,
                     "top_p": 0.9,
                     "num_thread": max(1, num_thread),

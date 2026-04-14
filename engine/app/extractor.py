@@ -34,8 +34,23 @@ class LlmExtractor:
         return self._client.breaker_open
 
     def structure_cv(self, raw_text: str) -> CvExtractionResult:
-        content = self._client.call_structured_cv(truncate_text(raw_text, max_chars=6000))
-        parsed_json = self._parse_json(content)
+        truncated = truncate_text(raw_text, max_chars=6000)
+
+        # Ollama may cut generation early (num_predict too small) which yields truncated JSON.
+        # Retry with a larger budget before failing.
+        content: str | None = None
+        last_parse_error: Exception | None = None
+        for attempt_num_predict in (None, 1600, 2400):
+            content = self._client.call_structured_cv(truncated, num_predict=attempt_num_predict)
+            try:
+                parsed_json = self._parse_json(content)
+                last_parse_error = None
+                break
+            except LlmExtractionError as exc:
+                last_parse_error = exc
+        if last_parse_error is not None:
+            raise last_parse_error
+
         parsed_json = self._normalize_llm_payload(parsed_json)
 
         try:
