@@ -62,7 +62,11 @@ class LlmExtractor:
         try:
             return CvExtractionResult.model_validate(parsed_json)
         except Exception as exc:
-            raise LlmExtractionError("LLM returned invalid schema content") from exc
+            # Bubble up useful details for the gateway (worker error string).
+            snippet = str(content).strip().replace("\n", "\\n")[:800]
+            raise LlmExtractionError(
+                f"LLM returned invalid schema content: {exc}. LLM snippet: {snippet}"
+            ) from exc
 
     def _normalize_llm_payload(self, payload: dict) -> dict:
         if not isinstance(payload, dict):
