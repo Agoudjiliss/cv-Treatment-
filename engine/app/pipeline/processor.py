@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 
-from app.deterministic_extractor import DeterministicExtractions, extract_deterministic
+from app.deterministic_extractor import DeterministicExtractions, extract_deterministic, keyword_skills
 from app.extractor import LlmExtractor
 from app.ocr import OcrEngine
 from app.pipeline.validator import semantic_validate
-from app.schemas import CvExtractionResult
+from app.schemas import CvExtractionResult, LanguageProficiency
 
 
 def compute_confidence(cv: CvExtractionResult) -> float:
@@ -39,7 +40,17 @@ def _is_probable_email(text: str) -> bool:
     return "@" in t and "." in t and " " not in t
 
 
-def _merge_deterministic(cv: CvExtractionResult, det: DeterministicExtractions) -> None:
+_LANG_NATIVE_HINTS = re.compile(
+    r"\b(?:mother\s+tongue|langue\s+maternelle|native|bilingue|bilingual)\b",
+    re.IGNORECASE,
+)
+_LANG_NORMALIZE = {
+    "english": "ENGLISH", "french": "FRENCH", "arabic": "ARABIC",
+    "spanish": "SPANISH", "german": "GERMAN", "italian": "ITALIAN",
+}
+
+
+def _merge_deterministic(cv: CvExtractionResult, det: DeterministicExtractions, raw_text: str = "") -> None:
     """Override contact fields with high-confidence deterministic values."""
     if det.primary_email and (not cv.contact.email or not cv.contact.email.strip()):
         cv.contact.email = det.primary_email
@@ -52,6 +63,20 @@ def _merge_deterministic(cv: CvExtractionResult, det: DeterministicExtractions) 
     # Override obviously wrong locations (e.g., email copied into location).
     if det.location_hint and (not cv.contact.location or not cv.contact.location.strip() or _is_probable_email(cv.contact.location)):
         cv.contact.location = det.location_hint
+
+    # Merge languages detected from keywords that the LLM missed.
+    if raw_text:
+        _, _, det_langs = keyword_skills(raw_text.lower())
+        existing = {(lp.language or "").upper() for lp in cv.languages}
+        native_context = bool(_LANG_NATIVE_HINTS.search(raw_text))
+        for lang_raw in det_langs:
+            lang_key = _LANG_NORMALIZE.get(lang_raw.lower(), lang_raw.upper())
+            if lang_key not in existing:
+                # Guess NATIVE for languages near "mother tongue" hint in text,
+                # otherwise keep proficiency unknown.
+                proficiency = "NATIVE" if native_context else None
+                cv.languages.append(LanguageProficiency(language=lang_key, proficiency=proficiency))
+                existing.add(lang_key)
 
 
 async def run_cv_pipeline_async(
@@ -76,7 +101,9 @@ async def run_cv_pipeline_async(
     llm_task = asyncio.to_thread(llm_extractor.structure_cv, raw_text)
     det_task = asyncio.to_thread(extract_deterministic, raw_text)
     llm_res, det_res = await asyncio.gather(llm_task, det_task, return_exceptions=True)
-    time_llm_ms = int((time.monotonic() - t1) * 1000)
+    time_combined_ms = int((time.monotonic() - t1) * 1000)
+    # Both tasks ran in parallel; we only have combined wall-clock time.
+    time_llm_ms = time_combined_ms
 
     t2 = time.monotonic()
     cv_errors: list[str] = []
@@ -92,7 +119,7 @@ async def run_cv_pipeline_async(
     else:
         det = det_res
 
-    _merge_deterministic(cv, det)
+    _merge_deterministic(cv, det, raw_text=raw_text)
     sem_errors = semantic_validate(cv)
     if sem_errors:
         cv_errors.extend([f"semantic:{e}" for e in sem_errors])
@@ -101,8 +128,8 @@ async def run_cv_pipeline_async(
     time_postprocess_ms = int((time.monotonic() - t2) * 1000)
     meta = {
         "time_ocr_ms": time_ocr_ms,
-        "time_deterministic_ms": time_llm_ms,
-        "time_llm_ms": time_llm_ms,
+        "time_combined_llm_det_ms": time_combined_ms,
+        "time_llm_ms": time_combined_ms,
         "time_postprocess_ms": time_postprocess_ms,
     }
     if cv_errors:

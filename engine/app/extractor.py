@@ -4,6 +4,7 @@ import json
 import re
 from difflib import SequenceMatcher
 
+from app.deterministic_extractor import extract_deterministic, format_anchor_block
 from app.llm.ollama_client import SKILLS_CATALOG_CSV, OllamaClient
 from app.schemas import CvExtractionResult
 
@@ -30,7 +31,56 @@ def _parse_catalog_csv() -> dict[int, tuple[str, str]]:
 
 _CATALOG: dict[int, tuple[str, str]] = _parse_catalog_csv()
 _CATALOG_ITEMS: list[tuple[int, str, str]] = [(cid, name, cat) for cid, (name, cat) in _CATALOG.items()]
-_MATCH_THRESHOLD = 0.45
+
+# Minimum SequenceMatcher ratio to accept a catalog match.
+# Set high to avoid spurious matches (e.g. "java spring boot" → "smart pricing").
+_MATCH_THRESHOLD = 0.70
+
+# Explicit keyword → catalogId table for technical terms that are too short or too
+# different in character composition to be matched by SequenceMatcher alone.
+# Keys are lowercase substrings; first match wins (order matters for specificity).
+_KEYWORD_CATALOG_MAP: list[tuple[str, int]] = [
+    # Development / engineering
+    ("machine learning", 120), ("artificial intelligence", 120), ("deep learning", 120),
+    ("data science", 58), ("data model", 58), ("data pipeline", 58),
+    ("spring boot", 8), ("spring", 8), ("java", 8),
+    ("python", 8), ("django", 8), ("flask", 8), ("fastapi", 8),
+    ("javascript", 8), ("typescript", 8), ("node.js", 8), ("nodejs", 8),
+    ("react", 8), ("angular", 8), ("vue", 8),
+    ("c#", 8), (".net", 8), ("dotnet", 8),
+    ("php", 8), ("ruby", 8), ("golang", 8), ("rust", 8), ("swift", 8),
+    ("flutter", 8), ("kotlin", 8),
+    ("full-stack", 8), ("fullstack", 8), ("full stack", 8), ("backend", 8), ("frontend", 8),
+    ("rest api", 8), ("graphql", 8), ("grpc", 8),
+    ("microservices", 186), ("micro-services", 186), ("micro services", 186),
+    ("integration", 186), ("service integration", 186),
+    ("systems integration", 197), ("system integration", 197),
+    ("cloud", 30), ("aws", 30), ("azure", 30), ("gcp", 30),
+    ("docker", 30), ("kubernetes", 30), ("k8s", 30), ("devops", 30), ("ci/cd", 29),
+    ("internet of things", 108), ("iot", 108),
+    ("oracle", 111), ("sql", 111), ("postgresql", 111), ("mysql", 111),
+    ("mongodb", 111), ("redis", 111), ("elasticsearch", 111), ("database", 111),
+    ("cyber security", 55), ("cybersecurity", 55), ("security", 180),
+    ("blockchain", 108),
+    # Soft skills
+    ("problem solving", 152), ("problem-solving", 152),
+    ("analytical thinking", 7), ("analytical", 7),
+    ("critical thinking", 47), ("critical", 47),
+    ("creative thinking", 45), ("creativity", 45),
+    ("negotiation", 132),
+    ("communication", 49), ("teamwork", 152), ("collaboration", 152),
+    ("autonomy", 7), ("adaptability", 7), ("leadership", 149),
+    ("project management", 156), ("agile", 6), ("scrum", 6),
+    ("troubleshoot", 217), ("technical support", 217),
+    # Generic IT
+    ("computer", 32), ("office technology", 32),
+    ("digital technology", 70), ("digital", 63),
+    ("website", 219), ("web", 8),
+    ("network", 134), ("networking", 134),
+    ("enterprise architecture", 76),
+    ("big data", 16),
+    ("user acceptance testing", 218), ("uat", 218), ("testing", 218),
+]
 
 
 def truncate_text(text: str, max_chars: int = 6000) -> str:
@@ -60,7 +110,13 @@ class LlmExtractor:
         return self._client.breaker_open
 
     def structure_cv(self, raw_text: str) -> CvExtractionResult:
-        content = self._client.call_structured_cv(truncate_text(raw_text, max_chars=6000))
+        truncated = truncate_text(raw_text, max_chars=6000)
+        try:
+            det = extract_deterministic(truncated)
+            anchors = format_anchor_block(det)
+        except Exception:
+            anchors = ""
+        content = self._client.call_structured_cv(truncated, anchors=anchors)
         parsed_json = self._parse_json(content)
         parsed_json = self._normalize_llm_payload(parsed_json)
         parsed_json = self._match_skills_to_catalog(parsed_json)
@@ -124,10 +180,18 @@ class LlmExtractor:
         for edu in payload.get("education") or []:
             if not isinstance(edu, dict):
                 continue
-            if edu.get("dateGraduation") is None and edu.get("year") is not None:
-                y = self._coerce_graduation_year(edu.get("year"))
-                if y is not None:
-                    edu["dateGraduation"] = y
+            # Coerce dateGraduation from any source (string, int, or sibling keys).
+            dg = edu.get("dateGraduation")
+            coerced = self._coerce_graduation_year(dg)
+            if coerced is None and edu.get("year") is not None:
+                coerced = self._coerce_graduation_year(edu.get("year"))
+            if coerced is None:
+                for field in ("establishment", "institution"):
+                    coerced = self._coerce_graduation_year(edu.get(field))
+                    if coerced:
+                        break
+            if coerced is not None:
+                edu["dateGraduation"] = coerced
         # Drop placeholder/empty education items.
         if isinstance(payload.get("education"), list):
             payload["education"] = [
@@ -139,10 +203,25 @@ class LlmExtractor:
         for exp in payload.get("experience") or []:
             if not isinstance(exp, dict):
                 continue
-            if exp.get("role") is None and exp.get("title"):
-                exp["role"] = exp["title"]
+            # Fill role from common aliases.
+            if not exp.get("role"):
+                for alias in ("title", "position", "jobTitle", "job_title", "poste"):
+                    if exp.get(alias):
+                        exp["role"] = str(exp[alias]).strip()
+                        break
+            # Last resort: first non-empty line of description.
+            if not exp.get("role"):
+                desc = (exp.get("description") or "").strip()
+                if desc:
+                    first_line = desc.split("\n")[0].split(".")[0].strip()
+                    if first_line and len(first_line) < 80:
+                        exp["role"] = first_line
             if exp.get("startDate") is None and exp.get("duration"):
                 exp["startDate"] = str(exp["duration"]).strip() or None
+            # Normalize dates to DD/MM/YYYY.
+            for date_key in ("startDate", "endDate"):
+                exp[date_key] = self._normalize_date(exp.get(date_key))
+
         # Drop placeholder/empty experience items.
         if isinstance(payload.get("experience"), list):
             payload["experience"] = [
@@ -154,6 +233,16 @@ class LlmExtractor:
         if "languages" in payload:
             payload["languages"] = self._normalize_language_proficiencies(payload.get("languages"))
 
+        # Strip common "professional summary:" prefixes the LLM adds.
+        summary = payload.get("summary")
+        if isinstance(summary, str):
+            payload["summary"] = re.sub(
+                r"^(?:professional\s+summary|résumé|resume|cv|summary)\s*:\s*\n*",
+                "",
+                summary.strip(),
+                flags=re.IGNORECASE,
+            ).strip() or None
+
         skills = payload.get("skills")
         if isinstance(skills, dict):
             for key in ("technical", "soft"):
@@ -164,13 +253,40 @@ class LlmExtractor:
         return payload
 
     @staticmethod
+    def _normalize_date(value: str | None) -> str | None:
+        """Normalise any recognisable date to DD/MM/YYYY; leave others unchanged."""
+        if not value or not isinstance(value, str):
+            return value
+        v = value.strip()
+        if not v:
+            return None
+        # Already DD/MM/YYYY
+        if re.fullmatch(r"\d{2}/\d{2}/\d{4}", v):
+            return v
+        # ISO YYYY-MM-DD
+        m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", v)
+        if m:
+            return f"{m.group(3)}/{m.group(2)}/{m.group(1)}"
+        # MM/YYYY or MM-YYYY → 01/MM/YYYY
+        m = re.fullmatch(r"(\d{2})[/-](\d{4})", v)
+        if m:
+            return f"01/{m.group(1)}/{m.group(2)}"
+        # YYYY only → 01/01/YYYY
+        m = re.fullmatch(r"(\d{4})", v)
+        if m:
+            return f"01/01/{m.group(1)}"
+        return v
+
+    @staticmethod
     def _match_skills_to_catalog(payload: dict) -> dict:
         """Approximate free-text skills to the closest catalog entry.
 
         Behavior:
-        - Replace each skill string with the closest catalog name (if above threshold)
-        - Record match details (id/name/category/ratio/source) in _meta
-        - Keep only catalog-based skills (no extra inventions)
+        - skills.technical and skills.soft keep the ORIGINAL free-text strings.
+        - catalogId is set to the best catalog match across all skills.
+        - Match uses a keyword lookup table first (for tech terms SequenceMatcher
+          can't handle), then falls back to SequenceMatcher with a high threshold.
+        - Match details are stored in _meta.skill_catalog_matches for audit.
         """
         skills = payload.get("skills")
         if not isinstance(skills, dict):
@@ -189,45 +305,54 @@ class LlmExtractor:
             if not isinstance(raw_list, list):
                 raw_list = [raw_list]
 
-            mapped: list[str] = []
-            seen: set[str] = set()
-
             for raw_skill in raw_list:
                 source = str(raw_skill).strip()
                 if not source:
                     continue
                 normed = source.lower()
 
-                best: tuple[int, str, str, float] | None = None  # (id,name,category,ratio)
-                for cid, name, category in _CATALOG_ITEMS:
-                    ratio = SequenceMatcher(None, normed, name.lower()).ratio()
-                    if best is None or ratio > best[3]:
-                        best = (cid, name, category, ratio)
+                # 1) Keyword lookup (explicit mapping for tech terms).
+                kw_cid: int | None = None
+                for keyword, kid in _KEYWORD_CATALOG_MAP:
+                    if keyword in normed:
+                        kw_cid = kid
+                        break
 
-                if best is None or best[3] < _MATCH_THRESHOLD:
+                if kw_cid is not None:
+                    name, category = _CATALOG.get(kw_cid, ("", ""))
+                    matches.append({
+                        "source": source,
+                        "matchedId": kw_cid,
+                        "matchedName": name,
+                        "matchedCategory": category,
+                        "ratio": 1.0,
+                        "method": "keyword",
+                        "group": group_key,
+                    })
+                    if best_overall is None or 1.0 > best_overall[1]:
+                        best_overall = (kw_cid, 1.0)
                     continue
 
-                cid, name, category, ratio = best
-                key = name.casefold()
-                if key not in seen:
-                    seen.add(key)
-                    mapped.append(name)
+                # 2) SequenceMatcher fallback with high threshold.
+                sm_best: tuple[int, str, str, float] | None = None
+                for cid, name, category in _CATALOG_ITEMS:
+                    ratio = SequenceMatcher(None, normed, name.lower()).ratio()
+                    if sm_best is None or ratio > sm_best[3]:
+                        sm_best = (cid, name, category, ratio)
 
-                matches.append(
-                    {
+                if sm_best is not None and sm_best[3] >= _MATCH_THRESHOLD:
+                    cid, name, category, ratio = sm_best
+                    matches.append({
                         "source": source,
                         "matchedId": cid,
                         "matchedName": name,
                         "matchedCategory": category,
                         "ratio": round(ratio, 3),
+                        "method": "fuzzy",
                         "group": group_key,
-                    }
-                )
-
-                if best_overall is None or ratio > best_overall[1]:
-                    best_overall = (cid, ratio)
-
-            skills[group_key] = mapped
+                    })
+                    if best_overall is None or ratio > best_overall[1]:
+                        best_overall = (cid, ratio)
 
         if best_overall is not None:
             skills["catalogId"] = best_overall[0]

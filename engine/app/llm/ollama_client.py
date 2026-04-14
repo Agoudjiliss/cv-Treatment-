@@ -332,29 +332,46 @@ SKILLS_CATALOG_CSV = """id,name,category
 221,Workforce Management,HR
 """
 
-STRUCTURE_PROMPT_TEMPLATE = """Extract ALL information from the CV below into valid JSON. No markdown, no commentary.
-You MUST populate every field that exists in the CV. Do NOT return empty arrays if data is present.
+STRUCTURE_PROMPT_TEMPLATE = """Extract ALL information from the CV into valid JSON. No markdown, no extra text.
 
-Schema:
-{{"contact":{{"name":"","email":"","phone":"","linkedin":"","location":""}},
-"languages":[{{"language":"ENGLISH","proficiency":"B2"}}],
-"education":[{{"institution":"","establishment":"","typeEducation":null,"dateGraduation":null}}],
-"experience":[{{"role":"","company":"","location":"","startDate":"","endDate":"","description":""}}],
-"certifications":[{{"title":"","issuer":"","issueDate":"","expiryDate":"","description":""}}],
-"achievement":[{{"projectName":"","description":"","startDate":null,"endDate":null}}],
-"skills":{{"technical":["Java","Python"],"soft":["Problem Solving"]}},
-"summary":""}}
+RULES (read carefully before writing JSON):
+1. EXPERIENCE: create ONE object per employer. NEVER merge jobs. Copy the exact job title into "role".
+2. ACHIEVEMENT/PROJECTS: create ONE object per project. Never merge.
+3. LANGUAGES: include ALL languages (mother tongue + foreign). Mother tongue = NATIVE proficiency.
+4. "role": MUST be the job title (e.g. "Software Engineer"). Never leave empty.
+5. "dateGraduation": integer year only (e.g. 2023). Extract from the graduation date.
+6. Dates in experience: DD/MM/YYYY format. Use "" if unknown, never null for dates.
+7. "summary": plain text only, no prefix like "Professional summary:" or "Resume:".
+8. "location" in contact: physical address/city only, never an email address.
+9. proficiency: A1|A2|B1|B2|C1|C2|NATIVE. Mother tongue always maps to NATIVE.
+10. typeEducation: LICENCE|MASTER|DOCTORAT|INGENIEUR|BTS|DUT|FORMATION_PROFESSIONNELLE or null.
 
-IMPORTANT:
-- Extract EVERY work experience, project, skill, and language from the CV.
-- technical skills: programming languages, frameworks, tools, databases.
-- soft skills: leadership, communication, teamwork, etc.
-- location = physical address/city, NOT email.
-- typeEducation: LICENCE|MASTER|DOCTORAT|INGENIEUR|BTS|DUT|FORMATION_PROFESSIONNELLE or null.
-- proficiency: A1|A2|B1|B2|C1|C2|NATIVE.
-- dateGraduation: year as integer (e.g. 2023).
-- Dates: DD/MM/YYYY. null for missing values. [] only for truly empty arrays.
-- summary: 1-2 sentence professional summary.
+{anchors}
+
+Schema (use this exact structure, add ALL items found — do not limit to one per array):
+{{
+  "contact": {{"name":"","email":"","phone":"","linkedin":"","location":""}},
+  "languages": [
+    {{"language":"FRENCH","proficiency":"NATIVE"}},
+    {{"language":"ARABIC","proficiency":"NATIVE"}},
+    {{"language":"ENGLISH","proficiency":"B2"}}
+  ],
+  "education": [
+    {{"institution":"University Name","establishment":"Degree Name","typeEducation":"INGENIEUR","dateGraduation":2023}},
+    {{"institution":"Another University","establishment":"Another Degree","typeEducation":"LICENCE","dateGraduation":2020}}
+  ],
+  "experience": [
+    {{"role":"Software Engineer","company":"Company A","location":"City","startDate":"01/01/2024","endDate":"31/12/2024","description":"What you did."}},
+    {{"role":"Backend Developer","company":"Company B","location":"City","startDate":"01/06/2023","endDate":"31/12/2023","description":"What you did."}}
+  ],
+  "certifications": [],
+  "achievement": [
+    {{"projectName":"Project Alpha","description":"What it does and tech used.","startDate":null,"endDate":null}},
+    {{"projectName":"Project Beta","description":"What it does and tech used.","startDate":null,"endDate":null}}
+  ],
+  "skills": {{"technical":["Java Spring Boot","Python","Docker"],"soft":["Problem Solving","Teamwork"]}},
+  "summary":"Brief 2-sentence professional summary without any prefix."
+}}
 
 CV TEXT:
 {raw_text}
@@ -453,12 +470,12 @@ class OllamaClient:
             raise
         return json.loads(raw)
 
-    def call_structured_cv(self, raw_text: str) -> str:
+    def call_structured_cv(self, raw_text: str, anchors: str = "") -> str:
         if self._breaker.is_open():
             raise RuntimeError("Circuit breaker is open for Ollama")
         try:
-            prompt = STRUCTURE_PROMPT_TEMPLATE.format(raw_text=raw_text)
-            num_predict = int(os.getenv("OLLAMA_NUM_PREDICT", "1536"))
+            prompt = STRUCTURE_PROMPT_TEMPLATE.format(raw_text=raw_text, anchors=anchors)
+            num_predict = int(os.getenv("OLLAMA_NUM_PREDICT", "2048"))
             num_thread = int(os.getenv("OLLAMA_LLAMA_NUM_THREAD", os.getenv("OLLAMA_NUM_THREAD", "4")))
             num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
             payload = {
