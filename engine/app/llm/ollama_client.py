@@ -107,11 +107,9 @@ SKILLS_CATALOG = (
 )
 
 STRUCTURE_PROMPT_TEMPLATE = """CV parser. Return ONLY valid JSON, no markdown.
-Schema: {{"contact":{{"name":"","email":"","phone":"","linkedin":"","location":""}},"education":[{{"institution":"","establishment":"","typeEducation":null,"dateGraduation":null}}],"experience":[{{"role":"","company":"","location":"","startDate":"","endDate":"","description":""}}],"certifications":[{{"title":"","issuer":"","issueDate":"","expiryDate":"","description":""}}],"achievement":[{{"projectName":"","description":"","startDate":null,"endDate":null}}],"languages":[{{"language":"","proficiency":null}}],"skills":[{{"catalogId":<int>,"score":"BASIC|INTERMEDIATE|ADVANCED|EXPERT|null"}}],"summary":""}}
-Skills catalog (id:name): {skills_catalog}
-Rules for skills: Each skill MUST reference a catalogId from the catalog above. Approximate the CV skills to the closest matching catalog entry. score reflects proficiency level deduced from context. Only include skills that are relevant to the CV content.
-Enums (or null): typeEducation=LICENCE|MASTER|DOCTORAT|INGENIEUR|BTS|DUT|FORMATION_PROFESSIONNELLE; score=BASIC|INTERMEDIATE|ADVANCED|EXPERT; proficiency=A1|A2|B1|B2|C1|C2|NATIVE; language=FRENCH|ARABIC|ENGLISH|SPANISH|GERMAN etc.
-Rules: dateGraduation=year int (e.g. 2023). Dates DD/MM/YYYY when possible. null for missing scalars, [] for missing arrays. No invention. Brief descriptions.
+Schema: {{"contact":{{"name":"","email":"","phone":"","linkedin":"","location":""}},"education":[{{"institution":"","establishment":"","typeEducation":null,"dateGraduation":null}}],"experience":[{{"role":"","company":"","location":"","startDate":"","endDate":"","description":""}}],"certifications":[{{"title":"","issuer":"","issueDate":"","expiryDate":"","description":""}}],"achievement":[{{"projectName":"","description":"","startDate":null,"endDate":null}}],"skills":{{"technical":["skill1","skill2"],"soft":["skill1"],"languages":[{{"language":"ENGLISH","proficiency":"B2"}}]}},"summary":""}}
+Enums (or null): typeEducation=LICENCE|MASTER|DOCTORAT|INGENIEUR|BTS|DUT|FORMATION_PROFESSIONNELLE; proficiency=A1|A2|B1|B2|C1|C2|NATIVE; language=FRENCH|ARABIC|ENGLISH|SPANISH|GERMAN etc.
+Rules: dateGraduation=year int (e.g. 2023). Dates DD/MM/YYYY when possible. null for missing scalars, [] for missing arrays. No invention. Brief descriptions. List all technical and soft skills found in the CV as free-text strings.
 
 CV TEXT:
 {raw_text}
@@ -210,13 +208,12 @@ class OllamaClient:
             raise
         return json.loads(raw)
 
-    @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=8), reraise=True)
     def call_structured_cv(self, raw_text: str) -> str:
         if self._breaker.is_open():
             raise RuntimeError("Circuit breaker is open for Ollama")
         try:
-            prompt = STRUCTURE_PROMPT_TEMPLATE.format(raw_text=raw_text, skills_catalog=SKILLS_CATALOG)
-            num_predict = int(os.getenv("OLLAMA_NUM_PREDICT", "2048"))
+            prompt = STRUCTURE_PROMPT_TEMPLATE.format(raw_text=raw_text)
+            num_predict = int(os.getenv("OLLAMA_NUM_PREDICT", "1024"))
             num_thread = int(os.getenv("OLLAMA_LLAMA_NUM_THREAD", os.getenv("OLLAMA_NUM_THREAD", "4")))
             num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
             payload = {

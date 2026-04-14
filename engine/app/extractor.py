@@ -2,9 +2,29 @@ from __future__ import annotations
 
 import json
 import re
+from difflib import SequenceMatcher
 
-from app.llm.ollama_client import OllamaClient
+from app.llm.ollama_client import SKILLS_CATALOG, OllamaClient
 from app.schemas import CvExtractionResult
+
+
+def _parse_catalog() -> dict[int, str]:
+    catalog: dict[int, str] = {}
+    for entry in SKILLS_CATALOG.split("|"):
+        entry = entry.strip()
+        if ":" not in entry:
+            continue
+        id_str, name = entry.split(":", 1)
+        try:
+            catalog[int(id_str.strip())] = name.strip().lower()
+        except ValueError:
+            continue
+    return catalog
+
+
+_CATALOG: dict[int, str] = _parse_catalog()
+_CATALOG_ITEMS: list[tuple[int, str]] = list(_CATALOG.items())
+_MATCH_THRESHOLD = 0.45
 
 
 def truncate_text(text: str, max_chars: int = 6000) -> str:
@@ -37,6 +57,7 @@ class LlmExtractor:
         content = self._client.call_structured_cv(truncate_text(raw_text, max_chars=6000))
         parsed_json = self._parse_json(content)
         parsed_json = self._normalize_llm_payload(parsed_json)
+        parsed_json = self._match_skills_to_catalog(parsed_json)
 
         try:
             return CvExtractionResult.model_validate(parsed_json)
@@ -96,6 +117,37 @@ class LlmExtractor:
             cid = skills.get("catalogId")
             if cid is not None and isinstance(cid, str) and cid.strip().isdigit():
                 skills["catalogId"] = int(cid.strip())
+        return payload
+
+    @staticmethod
+    def _match_skills_to_catalog(payload: dict) -> dict:
+        """Map free-text skills to the closest SKILLS_CATALOG entry."""
+        skills = payload.get("skills")
+        if not isinstance(skills, dict):
+            return payload
+
+        all_skill_names: list[str] = []
+        for key in ("technical", "soft"):
+            all_skill_names.extend(skills.get(key) or [])
+
+        if not all_skill_names:
+            return payload
+
+        best_id: int | None = None
+        best_ratio = 0.0
+        for skill_name in all_skill_names:
+            normed = skill_name.strip().lower()
+            if not normed:
+                continue
+            for cat_id, cat_name in _CATALOG_ITEMS:
+                ratio = SequenceMatcher(None, normed, cat_name).ratio()
+                if ratio > best_ratio:
+                    best_ratio = ratio
+                    best_id = cat_id
+
+        if best_id is not None and best_ratio >= _MATCH_THRESHOLD:
+            skills["catalogId"] = best_id
+
         return payload
 
     def _coerce_graduation_year(self, value) -> int | None:
