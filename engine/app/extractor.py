@@ -72,6 +72,19 @@ class LlmExtractor:
         if not isinstance(payload, dict):
             return payload
 
+        # Ensure list fields are lists of dicts (LLM can emit broken JSON fragments).
+        for key in ("education", "experience", "certifications", "achievement", "languages"):
+            val = payload.get(key)
+            if val is None:
+                continue
+            if isinstance(val, dict):
+                payload[key] = [val]
+            elif not isinstance(val, list):
+                payload[key] = []
+
+        if isinstance(payload.get("experience"), list):
+            payload["experience"] = [e for e in payload["experience"] if isinstance(e, dict)]
+
         certifications = payload.get("certifications")
         if certifications is None:
             payload["certifications"] = []
@@ -99,7 +112,7 @@ class LlmExtractor:
             achievement = []
         elif isinstance(achievement, dict):
             achievement = [achievement]
-        payload["achievement"] = self._normalize_achievements(achievement)
+        payload["achievement"] = self._normalize_achievements([a for a in achievement if isinstance(a, dict)])
         payload.pop("projects", None)
 
         for edu in payload.get("education") or []:
@@ -124,6 +137,13 @@ class LlmExtractor:
                 exp["role"] = exp["title"]
             if exp.get("startDate") is None and exp.get("duration"):
                 exp["startDate"] = str(exp["duration"]).strip() or None
+        # Drop placeholder/empty experience items.
+        if isinstance(payload.get("experience"), list):
+            payload["experience"] = [
+                e
+                for e in payload["experience"]
+                if isinstance(e, dict) and any((e.get("role"), e.get("company"), e.get("description"), e.get("startDate"), e.get("endDate")))
+            ]
 
         if "languages" in payload:
             payload["languages"] = self._normalize_language_proficiencies(payload.get("languages"))
