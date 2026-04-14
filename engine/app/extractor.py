@@ -4,26 +4,32 @@ import json
 import re
 from difflib import SequenceMatcher
 
-from app.llm.ollama_client import SKILLS_CATALOG, OllamaClient
+from app.llm.ollama_client import SKILLS_CATALOG_CSV, OllamaClient
 from app.schemas import CvExtractionResult
 
 
-def _parse_catalog() -> dict[int, str]:
-    catalog: dict[int, str] = {}
-    for entry in SKILLS_CATALOG.split("|"):
-        entry = entry.strip()
-        if ":" not in entry:
+def _parse_catalog_csv() -> dict[int, tuple[str, str]]:
+    catalog: dict[int, tuple[str, str]] = {}
+    for line in SKILLS_CATALOG_CSV.splitlines():
+        line = line.strip()
+        if not line or line.lower().startswith("id,"):
             continue
-        id_str, name = entry.split(":", 1)
+        parts = [p.strip() for p in line.split(",", 2)]
+        if len(parts) != 3:
+            continue
+        id_str, name, category = parts
         try:
-            catalog[int(id_str.strip())] = name.strip().lower()
+            cid = int(id_str)
         except ValueError:
             continue
+        if not name:
+            continue
+        catalog[cid] = (name, category)
     return catalog
 
 
-_CATALOG: dict[int, str] = _parse_catalog()
-_CATALOG_ITEMS: list[tuple[int, str]] = list(_CATALOG.items())
+_CATALOG: dict[int, tuple[str, str]] = _parse_catalog_csv()
+_CATALOG_ITEMS: list[tuple[int, str, str]] = [(cid, name, cat) for cid, (name, cat) in _CATALOG.items()]
 _MATCH_THRESHOLD = 0.45
 
 
@@ -159,32 +165,75 @@ class LlmExtractor:
 
     @staticmethod
     def _match_skills_to_catalog(payload: dict) -> dict:
-        """Map free-text skills to the closest SKILLS_CATALOG entry."""
+        """Approximate free-text skills to the closest catalog entry.
+
+        Behavior:
+        - Replace each skill string with the closest catalog name (if above threshold)
+        - Record match details (id/name/category/ratio/source) in _meta
+        - Keep only catalog-based skills (no extra inventions)
+        """
         skills = payload.get("skills")
         if not isinstance(skills, dict):
             return payload
 
-        all_skill_names: list[str] = []
-        for key in ("technical", "soft"):
-            all_skill_names.extend(skills.get(key) or [])
+        meta = payload.get("_meta")
+        if not isinstance(meta, dict):
+            meta = {}
+            payload["_meta"] = meta
 
-        if not all_skill_names:
-            return payload
+        matches: list[dict] = []
+        best_overall: tuple[int, float] | None = None
 
-        best_id: int | None = None
-        best_ratio = 0.0
-        for skill_name in all_skill_names:
-            normed = skill_name.strip().lower()
-            if not normed:
-                continue
-            for cat_id, cat_name in _CATALOG_ITEMS:
-                ratio = SequenceMatcher(None, normed, cat_name).ratio()
-                if ratio > best_ratio:
-                    best_ratio = ratio
-                    best_id = cat_id
+        for group_key in ("technical", "soft"):
+            raw_list = skills.get(group_key) or []
+            if not isinstance(raw_list, list):
+                raw_list = [raw_list]
 
-        if best_id is not None and best_ratio >= _MATCH_THRESHOLD:
-            skills["catalogId"] = best_id
+            mapped: list[str] = []
+            seen: set[str] = set()
+
+            for raw_skill in raw_list:
+                source = str(raw_skill).strip()
+                if not source:
+                    continue
+                normed = source.lower()
+
+                best: tuple[int, str, str, float] | None = None  # (id,name,category,ratio)
+                for cid, name, category in _CATALOG_ITEMS:
+                    ratio = SequenceMatcher(None, normed, name.lower()).ratio()
+                    if best is None or ratio > best[3]:
+                        best = (cid, name, category, ratio)
+
+                if best is None or best[3] < _MATCH_THRESHOLD:
+                    continue
+
+                cid, name, category, ratio = best
+                key = name.casefold()
+                if key not in seen:
+                    seen.add(key)
+                    mapped.append(name)
+
+                matches.append(
+                    {
+                        "source": source,
+                        "matchedId": cid,
+                        "matchedName": name,
+                        "matchedCategory": category,
+                        "ratio": round(ratio, 3),
+                        "group": group_key,
+                    }
+                )
+
+                if best_overall is None or ratio > best_overall[1]:
+                    best_overall = (cid, ratio)
+
+            skills[group_key] = mapped
+
+        if best_overall is not None:
+            skills["catalogId"] = best_overall[0]
+
+        if matches:
+            meta["skill_catalog_matches"] = matches[:50]
 
         return payload
 

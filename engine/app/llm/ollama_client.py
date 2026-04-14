@@ -106,6 +106,232 @@ SKILLS_CATALOG = (
     "220:Wholesale Access Regulations|221:Workforce Management"
 )
 
+# Canonical catalog with categories (source of truth for skill approximation).
+# Format: "id,name,category" CSV, one row per line.
+SKILLS_CATALOG_CSV = """id,name,category
+1,Access Network Design & Planning,Network
+2,Access Network Operations,Network
+3,Accounting Information Systems,Finance
+4,Accounting Standards,Finance
+5,Active Infrastructure Rollout,Network
+6,Agile / Scrum Project Management,Project Management
+7,Analytical Thinking,Soft Skills
+8,Application & Content Development,Digital
+9,B2B Customer Care / Digital Care,Customer Experience
+10,B2B Product / Portfolio Strategy Development,Business Strategy
+11,B2B Product Pricing & Offering,Commercial
+12,B2B Solution Selling,Sales
+13,B2C Sales,Sales
+14,Banking & Financial Compliance Regulations,Finance
+15,Bidding & Tendering Process,Procurement
+16,Big Data Management,Data
+17,Brand Management,Marketing
+18,Brand Marketer,Marketing
+19,Business Case Development,Business Strategy
+20,Business English,Communication
+21,Business Modeling,Business Strategy
+22,Business Process Management (BPM),Operations
+23,Business Strategist,Business Strategy
+24,Campaign Management,Marketing
+25,Capturing the Voice of the Customer (VoC),Customer Experience
+26,Cash Management,Finance
+27,Category Development & Management,Commercial
+28,Category Specific Knowledge,Commercial
+29,Change & Release Management,IT Operations
+30,Cloud Based Services,Cloud
+31,Complaint Management & Resolution,Customer Experience
+32,Computer & Office Technology,IT
+33,Concept to Market / Go to Market,Product Management
+34,Consumer Analytics,Analytics
+35,Contact Center Tools,Customer Experience
+36,Content Design & Production,Content
+37,Continuous Improvement (CI),Operations
+38,Contract Support,Legal
+39,Converged Products & Services,Telecom
+40,Core Network Design & Planning,Network
+41,Corporate Affairs,Corporate
+42,Corporate Social Responsibility,Corporate
+43,Cost Accounting & Management,Finance
+44,Creative Copywriting,Content
+45,Creative Thinking,Soft Skills
+46,Credit & Collection Process,Finance
+47,Critical Thinking,Soft Skills
+48,Cross-Selling,Sales
+49,Customer Communication,Customer Experience
+50,Customer Experience Analytics,Customer Experience
+51,Customer Experience Practices,Customer Experience
+52,Customer Journey Mapping,Customer Experience
+53,Customer Value Management,Customer Experience
+54,Customs Clearance Process,Logistics
+55,Cyber Security,Security
+56,Data Center Design & Planning,Infrastructure
+57,Data Center Operation & Maintenance,Infrastructure
+58,Data Modeling & Pipelining,Data
+59,Data Monetization,Data
+60,Design Management,Design
+61,Device Management,IT
+62,Digital Analytics,Digital
+63,Digital Business Development,Digital
+64,Digital Care,Customer Experience
+65,Digital Channels Management (Commercial Aspects),Digital
+66,Digital Channels Management (Technical Aspects),Digital
+67,Digital Content Management,Content
+68,Digital CX Technologies & Trends,Customer Experience
+69,Digital Procurement,Procurement
+70,Digital Technology Knowledge,IT
+71,Distribution Logistics,Logistics
+72,Documents & Records Management,Operations
+73,E2E Audit & Reconciliation,Finance
+74,Employee Engagement,HR
+75,Employee Performance Management,HR
+76,Enterprise Architecture,IT
+77,Enterprise Telephony Management,Telecom
+78,Entrepreneurial Mindset,Soft Skills
+79,Events & Sponsorship Management,Marketing
+80,Expats Integration & Management,HR
+81,Facilities Operations and Maintenance,Operations
+82,Financial Acumen,Finance
+83,Financial Analysis,Finance
+84,Financial Reporting & Compliance,Finance
+85,Fixed Assets Management,Finance
+86,Forklift Operation,Logistics
+87,Fraud Management,Risk
+88,Funding & Banking Relations,Finance
+89,Geomarketing,Marketing
+90,Governance Risk & Control,Risk
+91,Government Relations,Corporate
+92,HR Analytics,HR
+93,Incentives Program Management,HR
+94,Incident Management,IT Operations
+95,Information Security Compliance & Audit,Security
+96,Information Security Governance,Security
+97,Information Security Operation & Support,Security
+98,Information Security Risk Management,Security
+99,Information Security Systems & Tools,Security
+100,Insurance Claim Processing,Finance
+101,Insurance Planning & Policies Development,Finance
+102,Integrated Marketing Communication,Marketing
+103,Integrated Network Dimensioning,Network
+104,Internal Audit Planning & Execution,Audit
+105,Internal Communication Management,Corporate
+106,Internal Control,Finance
+107,International Professional Practices Framework (IPPF),Audit
+108,Internet of Things (and M2M),Technology
+109,Inventory Management & Optimization,Logistics
+110,Investment Evaluation & Management,Finance
+111,IT Platforms Operations,IT
+112,Job Analysis - Design & Evaluation,HR
+113,Key Account Management,Sales
+114,Knowledge Base Management,IT
+115,Labor Law & Employment Legislation,Legal
+116,Lobbying,Corporate
+117,Local Digital Laws & Regulations,Legal
+118,Local Language Knowledge,Communication
+119,Logistics & Warehousing,Logistics
+120,Machine Learning / Artificial Intelligence,Data
+121,Management Reporting,Finance
+122,Market Research & Study,Marketing
+123,Market Segmentation,Marketing
+124,Mechanical - Electrical & Plumbing Knowledge,Engineering
+125,Media Planning & Management,Marketing
+126,Media Technologies,Digital
+127,Meeting Administration,Operations
+128,Message Handling,Communication
+129,MFS Adjacent Services & Products,Telecom
+130,MFS Ecosystem & Trends,Telecom
+131,Monitoring & Measuring Communication Effectiveness,Marketing
+132,Negotiation,Soft Skills
+133,Network Analytics,Network
+134,Network Monitoring,Network
+135,Network Operations Center (NOC),Network
+136,Network Optimization,Network
+137,Network Performance Management,Network
+138,Network Testing,Network
+139,Network Virtualization (NV),Network
+140,Online / Digital Marketing,Digital
+141,Online / Digital Sales,Sales
+142,Organizational Structuring,HR
+143,Outdoor Advertising Management,Marketing
+144,Partnership Engagement - Execution & Monitoring,Business Strategy
+145,Passive Infrastructure Deployment,Network
+146,Passive Network Operations,Network
+147,Payroll Process Management,Finance
+148,Performance Dashboard Design & Development,Analytics
+149,Performance Management & Reporting,HR
+150,Performance Measurement & Reporting,HR
+151,Planning & Budgeting,Finance
+152,Problem Solving,Soft Skills
+153,Product / Portfolio Strategy Development,Product Management
+154,Product Development,Product Management
+155,Product Portfolio & Lifecycle Management,Product Management
+156,Project Management,Project Management
+157,Protocol Service Knowledge,Telecom
+158,Public Relations,Marketing
+159,QMS Implementation & Maintenance,Quality
+160,Regulatory Economics,Legal
+161,Request to Pay Process (R2P),Finance
+162,Retail Sales Operations,Sales
+163,Retention & Loyalty Program Management,Customer Experience
+164,Revenue Assurance Systems & Tools,Finance
+165,Revenue Cycle Management,Finance
+166,Revenue Leakage Control,Finance
+167,Reward Management,HR
+168,Risk Appetite Framework Management,Risk
+169,Risk Identification & Assessment,Risk
+170,Risk Management,Risk
+171,Risk Management Policy & Procedures,Risk
+172,Risk Response & Reporting,Risk
+173,Route Planning & Traffic Regulations,Logistics
+174,Safety Management,Operations
+175,Sales & Distribution Analytics,Sales
+176,Sales Automation,Sales
+177,Sales Fulfillment,Sales
+178,Sales Training,Sales
+179,Scarce Resources Management,Operations
+180,Security Planning,Security
+181,Service Assurance & Quality,Telecom
+182,Service Configuration & Activation Process,Telecom
+183,Service Delivery Networks,Telecom
+184,Service Quality Monitoring & Compliance,Telecom
+185,Service-Orientated IT,IT
+186,Services Integration,IT
+187,Shared Services Management,Operations
+188,Smart Pricing,Commercial
+189,Social Media Management,Marketing
+190,Statistics,Data
+191,Strategy Formulation,Business Strategy
+192,Strategy Implementation,Business Strategy
+193,Succession Planning,HR
+194,Supplier Negotiation & Deal Closing,Procurement
+195,Suppliers & Contracts Management,Procurement
+196,Supply Market Analysis,Procurement
+197,Systems Integration,IT
+198,Talent Assessment,HR
+199,Talent Capability Building,HR
+200,Talent Market Intelligence & Acquisition,HR
+201,Tax Audit & Planning,Finance
+202,Tax Return Preparation,Finance
+203,Taxation Law,Legal
+204,Technical Aspects of Wholesale,Telecom
+205,Technical Specifications Development,Engineering
+206,Technical Writing and Reporting,Communication
+207,Telecom Market & Industry Knowledge,Telecom
+208,Telecom Regulatory Policy,Telecom
+209,Trade Marketing,Marketing
+210,Training Management & Facilitation,HR
+211,Transactional Accounting & Closing,Finance
+212,Translation & Interpretation,Communication
+213,Transport Network Design & Planning,Network
+214,Transportation & Fleet Management,Logistics
+215,Travel Planning & Assistance,Operations
+216,Treasury Policies & Risk,Finance
+217,Troubleshooting & Technical Problem Solving,IT
+218,User Acceptance Testing (UAT),IT
+219,Website Management,Digital
+220,Wholesale Access Regulations,Telecom
+221,Workforce Management,HR
+"""
+
 STRUCTURE_PROMPT_TEMPLATE = """Extract ALL information from the CV below into valid JSON. No markdown, no commentary.
 You MUST populate every field that exists in the CV. Do NOT return empty arrays if data is present.
 

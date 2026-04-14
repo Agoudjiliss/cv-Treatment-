@@ -58,31 +58,56 @@ async def run_cv_pipeline_async(
     pdf_bytes: bytes, ocr_engine: OcrEngine, llm_extractor: LlmExtractor
 ) -> CvExtractionResult:
     t0 = time.monotonic()
-    raw_text = await asyncio.to_thread(ocr_engine.extract_text_from_pdf_bytes, pdf_bytes)
+    try:
+        raw_text = await asyncio.to_thread(ocr_engine.extract_text_from_pdf_bytes, pdf_bytes)
+    except Exception as exc:
+        cv = CvExtractionResult()
+        cv.meta = {"error": f"ocr_failed: {exc}"}
+        cv.confidence = compute_confidence(cv)
+        return cv
     time_ocr_ms = int((time.monotonic() - t0) * 1000)
     if not raw_text.strip():
-        raise RuntimeError("PaddleOCR returned empty text")
+        cv = CvExtractionResult()
+        cv.meta = {"time_ocr_ms": time_ocr_ms, "error": "ocr_empty_text"}
+        cv.confidence = compute_confidence(cv)
+        return cv
 
     t1 = time.monotonic()
     llm_task = asyncio.to_thread(llm_extractor.structure_cv, raw_text)
     det_task = asyncio.to_thread(extract_deterministic, raw_text)
-    cv, det = await asyncio.gather(llm_task, det_task)
+    llm_res, det_res = await asyncio.gather(llm_task, det_task, return_exceptions=True)
     time_llm_ms = int((time.monotonic() - t1) * 1000)
 
     t2 = time.monotonic()
+    cv_errors: list[str] = []
+    if isinstance(llm_res, Exception):
+        cv = CvExtractionResult()
+        cv_errors.append(f"llm_failed: {llm_res}")
+    else:
+        cv = llm_res
+
+    if isinstance(det_res, Exception):
+        det = DeterministicExtractions()
+        cv_errors.append(f"deterministic_failed: {det_res}")
+    else:
+        det = det_res
+
     _merge_deterministic(cv, det)
-    errors = semantic_validate(cv)
-    if errors:
-        raise RuntimeError(f"Semantic validation failed: {', '.join(errors)}")
+    sem_errors = semantic_validate(cv)
+    if sem_errors:
+        cv_errors.extend([f"semantic:{e}" for e in sem_errors])
 
     cv.confidence = compute_confidence(cv)
     time_postprocess_ms = int((time.monotonic() - t2) * 1000)
-    cv.meta = {
+    meta = {
         "time_ocr_ms": time_ocr_ms,
         "time_deterministic_ms": time_llm_ms,
         "time_llm_ms": time_llm_ms,
         "time_postprocess_ms": time_postprocess_ms,
     }
+    if cv_errors:
+        meta["errors"] = cv_errors[:20]
+    cv.meta = meta
     return CvExtractionResult.model_validate(cv.model_dump(by_alias=True))
 
 
