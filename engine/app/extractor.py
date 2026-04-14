@@ -34,23 +34,8 @@ class LlmExtractor:
         return self._client.breaker_open
 
     def structure_cv(self, raw_text: str) -> CvExtractionResult:
-        truncated = truncate_text(raw_text, max_chars=6000)
-
-        # Ollama may cut generation early (num_predict too small) which yields truncated JSON.
-        # Retry with a larger budget before failing.
-        content: str | None = None
-        last_parse_error: Exception | None = None
-        for attempt_num_predict in (None, 1600, 2400):
-            content = self._client.call_structured_cv(truncated, num_predict=attempt_num_predict)
-            try:
-                parsed_json = self._parse_json(content)
-                last_parse_error = None
-                break
-            except LlmExtractionError as exc:
-                last_parse_error = exc
-        if last_parse_error is not None:
-            raise last_parse_error
-
+        content = self._client.call_structured_cv(truncate_text(raw_text, max_chars=6000))
+        parsed_json = self._parse_json(content)
         parsed_json = self._normalize_llm_payload(parsed_json)
 
         try:
@@ -216,6 +201,11 @@ class LlmExtractor:
             if isinstance(parsed, dict):
                 return parsed
 
+        # LLM may have been cut off by num_predict limit → truncated JSON.
+        repaired = self._try_repair_truncated_json(text)
+        if repaired is not None:
+            return repaired
+
         snippet = text[:600].replace("\n", "\\n")
         raise LlmExtractionError(f"Unable to parse JSON from LLM response. LLM snippet: {snippet}")
 
@@ -258,6 +248,59 @@ class LlmExtractor:
                 depth -= 1
                 if depth == 0:
                     return text[start : i + 1]
+        return None
+
+    def _try_repair_truncated_json(self, text: str) -> dict | None:
+        """Try to salvage a JSON object that was cut off mid-generation.
+
+        Strategy: find the opening '{', strip the dangling tail back to the
+        last complete key-value, then close every open bracket/brace.
+        """
+        start = text.find("{")
+        if start == -1:
+            return None
+        fragment = text[start:]
+
+        # Walk the string tracking open brackets/braces (outside strings).
+        stack: list[str] = []
+        in_string = False
+        escape = False
+        last_good = start  # position of last structural char at depth balance
+        for i, ch in enumerate(fragment):
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch in ("{", "["):
+                stack.append("}" if ch == "{" else "]")
+            elif ch in ("}", "]"):
+                if stack:
+                    stack.pop()
+                last_good = i
+
+        if not stack:
+            return None
+
+        # Trim back to a safe cut point: last comma, colon, or complete value.
+        cut = fragment[: last_good + 1] if last_good > 0 else fragment
+        cut = cut.rstrip()
+        cut = re.sub(r'[,:\s"]+$', "", cut)
+        cut = re.sub(r",\s*$", "", cut)
+
+        # Close everything that's still open.
+        closing = "".join(reversed(stack))
+        repaired = cut + closing
+
+        parsed = self._try_json_parse(repaired)
+        if isinstance(parsed, dict):
+            return parsed
         return None
 
     def _try_json_parse(self, candidate: str) -> dict | None:
