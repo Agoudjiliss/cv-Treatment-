@@ -4,7 +4,6 @@ import json
 import re
 from difflib import SequenceMatcher
 
-from app.deterministic_extractor import extract_deterministic, format_anchor_block
 from app.llm.ollama_client import SKILLS_CATALOG_CSV, OllamaClient
 from app.schemas import CvExtractionResult
 
@@ -109,13 +108,8 @@ class LlmExtractor:
     def circuit_open(self) -> bool:
         return self._client.breaker_open
 
-    def structure_cv(self, raw_text: str) -> CvExtractionResult:
+    def structure_cv(self, raw_text: str, anchors: str = "") -> CvExtractionResult:
         truncated = truncate_text(raw_text, max_chars=6000)
-        try:
-            det = extract_deterministic(truncated)
-            anchors = format_anchor_block(det)
-        except Exception:
-            anchors = ""
         content = self._client.call_structured_cv(truncated, anchors=anchors)
         parsed_json = self._parse_json(content)
         parsed_json = self._normalize_llm_payload(parsed_json)

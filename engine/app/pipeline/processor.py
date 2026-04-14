@@ -4,7 +4,7 @@ import asyncio
 import re
 import time
 
-from app.deterministic_extractor import DeterministicExtractions, extract_deterministic, keyword_skills
+from app.deterministic_extractor import DeterministicExtractions, extract_deterministic, format_anchor_block, keyword_skills
 from app.extractor import LlmExtractor
 from app.ocr import OcrEngine
 from app.pipeline.validator import semantic_validate
@@ -97,15 +97,26 @@ async def run_cv_pipeline_async(
         cv.confidence = compute_confidence(cv)
         return cv
 
+    # Run deterministic extraction first (fast, ~100ms) to build anchors for the LLM prompt.
     t1 = time.monotonic()
-    llm_task = asyncio.to_thread(llm_extractor.structure_cv, raw_text)
-    det_task = asyncio.to_thread(extract_deterministic, raw_text)
-    llm_res, det_res = await asyncio.gather(llm_task, det_task, return_exceptions=True)
-    time_combined_ms = int((time.monotonic() - t1) * 1000)
-    # Both tasks ran in parallel; we only have combined wall-clock time.
-    time_llm_ms = time_combined_ms
+    try:
+        det = await asyncio.to_thread(extract_deterministic, raw_text)
+        anchors = format_anchor_block(det)
+    except Exception as _det_exc:
+        det = DeterministicExtractions()
+        anchors = ""
+
+    time_det_ms = int((time.monotonic() - t1) * 1000)
 
     t2 = time.monotonic()
+    try:
+        llm_res = await asyncio.to_thread(llm_extractor.structure_cv, raw_text, anchors)
+    except Exception as _llm_exc:
+        llm_res = _llm_exc
+    time_llm_ms = int((time.monotonic() - t2) * 1000)
+    time_combined_ms = time_det_ms + time_llm_ms
+
+    t3 = time.monotonic()
     cv_errors: list[str] = []
     if isinstance(llm_res, Exception):
         cv = CvExtractionResult()
@@ -113,22 +124,16 @@ async def run_cv_pipeline_async(
     else:
         cv = llm_res
 
-    if isinstance(det_res, Exception):
-        det = DeterministicExtractions()
-        cv_errors.append(f"deterministic_failed: {det_res}")
-    else:
-        det = det_res
-
     _merge_deterministic(cv, det, raw_text=raw_text)
     sem_errors = semantic_validate(cv)
     if sem_errors:
         cv_errors.extend([f"semantic:{e}" for e in sem_errors])
 
     cv.confidence = compute_confidence(cv)
-    time_postprocess_ms = int((time.monotonic() - t2) * 1000)
+    time_postprocess_ms = int((time.monotonic() - t3) * 1000)
     meta = {
         "time_ocr_ms": time_ocr_ms,
-        "time_combined_llm_det_ms": time_combined_ms,
+        "time_det_ms": time_det_ms,
         "time_llm_ms": time_combined_ms,
         "time_postprocess_ms": time_postprocess_ms,
     }

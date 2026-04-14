@@ -334,44 +334,19 @@ SKILLS_CATALOG_CSV = """id,name,category
 
 STRUCTURE_PROMPT_TEMPLATE = """Extract ALL information from the CV into valid JSON. No markdown, no extra text.
 
-RULES (read carefully before writing JSON):
-1. EXPERIENCE: create ONE object per employer. NEVER merge jobs. Copy the exact job title into "role".
-2. ACHIEVEMENT/PROJECTS: create ONE object per project. Never merge.
-3. LANGUAGES: include ALL languages (mother tongue + foreign). Mother tongue = NATIVE proficiency.
-4. "role": MUST be the job title (e.g. "Software Engineer"). Never leave empty.
-5. "dateGraduation": integer year only (e.g. 2023). Extract from the graduation date.
-6. Dates in experience: DD/MM/YYYY format. Use "" if unknown, never null for dates.
-7. "summary": plain text only, no prefix like "Professional summary:" or "Resume:".
-8. "location" in contact: physical address/city only, never an email address.
-9. proficiency: A1|A2|B1|B2|C1|C2|NATIVE. Mother tongue always maps to NATIVE.
-10. typeEducation: LICENCE|MASTER|DOCTORAT|INGENIEUR|BTS|DUT|FORMATION_PROFESSIONNELLE or null.
+RULES:
+- ONE object per employer in experience. ONE object per project in achievement. Never merge.
+- "role": exact job title from CV. Never empty.
+- "dateGraduation": integer year only (e.g. 2023).
+- Experience dates: DD/MM/YYYY. Empty string if unknown.
+- "summary": plain text, no "Professional summary:" prefix.
+- "location": city/address only, never an email.
+- languages: include ALL (mother tongue = NATIVE proficiency).
+- proficiency: A1|A2|B1|B2|C1|C2|NATIVE. typeEducation: LICENCE|MASTER|DOCTORAT|INGENIEUR|BTS|DUT|FORMATION_PROFESSIONNELLE|null.
 
 {anchors}
-
-Schema (use this exact structure, add ALL items found — do not limit to one per array):
-{{
-  "contact": {{"name":"","email":"","phone":"","linkedin":"","location":""}},
-  "languages": [
-    {{"language":"FRENCH","proficiency":"NATIVE"}},
-    {{"language":"ARABIC","proficiency":"NATIVE"}},
-    {{"language":"ENGLISH","proficiency":"B2"}}
-  ],
-  "education": [
-    {{"institution":"University Name","establishment":"Degree Name","typeEducation":"INGENIEUR","dateGraduation":2023}},
-    {{"institution":"Another University","establishment":"Another Degree","typeEducation":"LICENCE","dateGraduation":2020}}
-  ],
-  "experience": [
-    {{"role":"Software Engineer","company":"Company A","location":"City","startDate":"01/01/2024","endDate":"31/12/2024","description":"What you did."}},
-    {{"role":"Backend Developer","company":"Company B","location":"City","startDate":"01/06/2023","endDate":"31/12/2023","description":"What you did."}}
-  ],
-  "certifications": [],
-  "achievement": [
-    {{"projectName":"Project Alpha","description":"What it does and tech used.","startDate":null,"endDate":null}},
-    {{"projectName":"Project Beta","description":"What it does and tech used.","startDate":null,"endDate":null}}
-  ],
-  "skills": {{"technical":["Java Spring Boot","Python","Docker"],"soft":["Problem Solving","Teamwork"]}},
-  "summary":"Brief 2-sentence professional summary without any prefix."
-}}
+Schema:
+{{"contact":{{"name":"","email":"","phone":"","linkedin":"","location":""}},"languages":[{{"language":"FRENCH","proficiency":"NATIVE"}},{{"language":"ENGLISH","proficiency":"B2"}}],"education":[{{"institution":"","establishment":"","typeEducation":null,"dateGraduation":2023}}],"experience":[{{"role":"Job Title","company":"","location":"","startDate":"DD/MM/YYYY","endDate":"DD/MM/YYYY","description":""}}],"certifications":[],"achievement":[{{"projectName":"","description":"","startDate":null,"endDate":null}}],"skills":{{"technical":["Java","Python"],"soft":["Problem Solving"]}},"summary":""}}
 
 CV TEXT:
 {raw_text}
