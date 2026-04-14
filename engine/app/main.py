@@ -63,7 +63,7 @@ def health_ready() -> JSONResponse:
 
 @app.post("/process", response_model=CvExtractionResult)
 async def process(file: UploadFile = File(...)) -> JSONResponse:
-    if file.content_type != "application/pdf" and not file.filename.lower().endswith(".pdf"):
+    if file.content_type != "application/pdf" and not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
     pdf_bytes = await file.read()

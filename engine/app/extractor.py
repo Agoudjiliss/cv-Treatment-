@@ -82,18 +82,84 @@ _KEYWORD_CATALOG_MAP: list[tuple[str, int]] = [
 ]
 
 
+_CV_SECTION_HEADERS = re.compile(
+    r"^(?:work\s+experience|experience(?:s)?|professional\s+experience|employment|"
+    r"education(?:\s+&\s+training)?|formation|parcours\s+(?:académique|professionnel)|"
+    r"skills?|compétences?|languages?|langues?|projects?|achievements?|certifications?|"
+    r"summary|profil|objective|about\s+me|contact)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Priority order: sections we most need the LLM to see.
+_SECTION_PRIORITY = [
+    "contact", "profil", "about", "summary", "objective",
+    "work experience", "experience", "professional experience", "employment",
+    "education", "formation",
+    "skills", "compétences",
+    "projects", "achievements",
+    "languages", "langues",
+    "certifications",
+]
+
+
 def truncate_text(text: str, max_chars: int = 6000) -> str:
-    """
-    Keep the most informative parts while bounding prompt size:
-    - Start of CV tends to contain contact + summary
-    - End often contains skills / certifications / projects
+    """Section-aware truncation: keep every section in priority order until budget exhausted.
+    Falls back to head+tail if no section headers are detected.
     """
     clean = text.strip()
     if len(clean) <= max_chars:
         return clean
-    head = clean[: max_chars // 2].rstrip()
-    tail = clean[-(max_chars - len(head)) :].lstrip()
-    return f"{head}\n...\n{tail}".strip()
+
+    # Split into sections.
+    lines = clean.splitlines()
+    sections: list[tuple[str, list[str]]] = []
+    current_header = "contact"
+    current_lines: list[str] = []
+    for line in lines:
+        if _CV_SECTION_HEADERS.match(line.strip()):
+            sections.append((current_header, current_lines))
+            current_header = line.strip().lower()
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+    sections.append((current_header, current_lines))
+
+    # If we didn't detect any sections, fall back to head + tail.
+    if len(sections) <= 1:
+        head = clean[: max_chars // 2].rstrip()
+        tail = clean[-(max_chars - len(head)):].lstrip()
+        return f"{head}\n...\n{tail}".strip()
+
+    # Sort sections by priority, then by original order for same-priority items.
+    def _priority(item: tuple[str, list[str]]) -> int:
+        header = item[0].lower()
+        for i, key in enumerate(_SECTION_PRIORITY):
+            if key in header:
+                return i
+        return len(_SECTION_PRIORITY)
+
+    ordered = sorted(enumerate(sections), key=lambda x: _priority(x[1]))
+
+    # Greedily pack sections until budget runs out.
+    kept_indices: set[int] = set()
+    budget = max_chars
+    for orig_idx, (header, sec_lines) in ordered:
+        chunk = "\n".join(sec_lines)
+        if len(chunk) <= budget:
+            kept_indices.add(orig_idx)
+            budget -= len(chunk)
+        elif budget > 200:
+            # Keep a truncated version of the section.
+            kept_indices.add(orig_idx)
+            break
+
+    # Reassemble in original order.
+    result_parts: list[str] = []
+    for i, (header, sec_lines) in enumerate(sections):
+        if i in kept_indices:
+            result_parts.append("\n".join(sec_lines))
+
+    return "\n".join(result_parts).strip()[:max_chars]
 
 
 class LlmExtractionError(RuntimeError):
@@ -179,11 +245,8 @@ class LlmExtractor:
             coerced = self._coerce_graduation_year(dg)
             if coerced is None and edu.get("year") is not None:
                 coerced = self._coerce_graduation_year(edu.get("year"))
-            if coerced is None:
-                for field in ("establishment", "institution"):
-                    coerced = self._coerce_graduation_year(edu.get(field))
-                    if coerced:
-                        break
+            # Do NOT scan institution/establishment text: risks picking founding years
+            # (e.g. "Harvard University, founded 1636") instead of graduation year.
             if coerced is not None:
                 edu["dateGraduation"] = coerced
         # Drop placeholder/empty education items.
@@ -217,6 +280,10 @@ class LlmExtractor:
             # Normalize dates to DD/MM/YYYY.
             for date_key in ("startDate", "endDate"):
                 exp[date_key] = self._normalize_date(exp.get(date_key))
+            # Coerce null description to empty string (schema expects str | None but
+            # downstream consumers expect at least an empty string, not null).
+            if exp.get("description") is None:
+                exp["description"] = ""
 
         # Drop placeholder/empty experience items.
         if isinstance(payload.get("experience"), list):
@@ -399,6 +466,12 @@ class LlmExtractor:
             if url and str(url).strip():
                 base = item.get("description") or ""
                 item["description"] = (base + " " if base else "") + f"URL: {url}".strip()
+            # Normalize achievement dates.
+            for date_key in ("startDate", "endDate"):
+                item[date_key] = self._normalize_date(item.get(date_key))
+            # Coerce null description to empty string.
+            if item.get("description") is None:
+                item["description"] = ""
             if item.get("projectName") or item.get("description"):
                 out.append(item)
         return out

@@ -52,7 +52,8 @@ def _fill_summary(cv: CvExtractionResult) -> None:
     if tech:
         parts.append(f"skilled in {', '.join(tech)}")
     if parts:
-        cv.summary = ". ".join(parts).capitalize() + "."
+        sentence = ". ".join(parts)
+        cv.summary = sentence[0].upper() + sentence[1:] + "."
 
 
 def _is_probable_email(text: str) -> bool:
@@ -60,7 +61,7 @@ def _is_probable_email(text: str) -> bool:
     return "@" in t and "." in t and " " not in t
 
 
-_LANG_NATIVE_HINTS = re.compile(
+_LANG_NATIVE_HINT_RE = re.compile(
     r"\b(?:mother\s+tongue|langue\s+maternelle|native|bilingue|bilingual)\b",
     re.IGNORECASE,
 )
@@ -68,6 +69,21 @@ _LANG_NORMALIZE = {
     "english": "ENGLISH", "french": "FRENCH", "arabic": "ARABIC",
     "spanish": "SPANISH", "german": "GERMAN", "italian": "ITALIAN",
 }
+
+
+def _detect_native_languages(raw_text: str) -> set[str]:
+    """Return language keys that appear on or near a 'mother tongue' line."""
+    native: set[str] = set()
+    lines = raw_text.splitlines()
+    for i, line in enumerate(lines):
+        if not _LANG_NATIVE_HINT_RE.search(line):
+            continue
+        # Scan the hint line itself + 1 line before and 2 lines after.
+        context = " ".join(lines[max(0, i - 1): i + 3]).lower()
+        for lang_raw, lang_key in _LANG_NORMALIZE.items():
+            if lang_raw in context:
+                native.add(lang_key)
+    return native
 
 
 def _merge_deterministic(cv: CvExtractionResult, det: DeterministicExtractions, raw_text: str = "") -> None:
@@ -84,17 +100,15 @@ def _merge_deterministic(cv: CvExtractionResult, det: DeterministicExtractions, 
     if det.location_hint and (not cv.contact.location or not cv.contact.location.strip() or _is_probable_email(cv.contact.location)):
         cv.contact.location = det.location_hint
 
-    # Merge languages detected from keywords that the LLM missed.
+    # Merge languages the LLM missed, using keyword detection.
     if raw_text:
         _, _, det_langs = keyword_skills(raw_text.lower())
         existing = {(lp.language or "").upper() for lp in cv.languages}
-        native_context = bool(_LANG_NATIVE_HINTS.search(raw_text))
+        native_langs = _detect_native_languages(raw_text)
         for lang_raw in det_langs:
             lang_key = _LANG_NORMALIZE.get(lang_raw.lower(), lang_raw.upper())
             if lang_key not in existing:
-                # Guess NATIVE for languages near "mother tongue" hint in text,
-                # otherwise keep proficiency unknown.
-                proficiency = "NATIVE" if native_context else None
+                proficiency = "NATIVE" if lang_key in native_langs else None
                 cv.languages.append(LanguageProficiency(language=lang_key, proficiency=proficiency))
                 existing.add(lang_key)
 
@@ -152,12 +166,14 @@ async def run_cv_pipeline_async(
 
     cv.confidence = compute_confidence(cv)
     time_postprocess_ms = int((time.monotonic() - t3) * 1000)
-    meta = {
+    # Preserve any enrichment data already attached to cv.meta (e.g. skill_catalog_matches).
+    meta: dict = dict(cv.meta) if isinstance(cv.meta, dict) else {}
+    meta.update({
         "time_ocr_ms": time_ocr_ms,
         "time_det_ms": time_det_ms,
         "time_llm_ms": time_combined_ms,
         "time_postprocess_ms": time_postprocess_ms,
-    }
+    })
     if cv_errors:
         meta["errors"] = cv_errors[:20]
     cv.meta = meta
