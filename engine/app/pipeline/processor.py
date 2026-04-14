@@ -14,7 +14,7 @@ def compute_confidence(cv: CvExtractionResult) -> float:
     skill_signal = bool(
         cv.skills.technical
         or cv.skills.soft
-        or cv.skills.languages
+        or cv.languages
         or (cv.skills.score and cv.skills.score.strip())
         or cv.skills.catalog_id is not None
     )
@@ -34,17 +34,23 @@ def compute_confidence(cv: CvExtractionResult) -> float:
     return round(filled / 9, 2)
 
 
+def _is_probable_email(text: str) -> bool:
+    t = (text or "").strip()
+    return "@" in t and "." in t and " " not in t
+
+
 def _merge_deterministic(cv: CvExtractionResult, det: DeterministicExtractions) -> None:
     """Override contact fields with high-confidence deterministic values."""
-    if det.primary_email and not cv.contact.email:
+    if det.primary_email and (not cv.contact.email or not cv.contact.email.strip()):
         cv.contact.email = det.primary_email
-    if det.primary_phone and not cv.contact.phone:
+    if det.primary_phone and (not cv.contact.phone or not cv.contact.phone.strip()):
         cv.contact.phone = det.primary_phone
-    if det.primary_linkedin and not cv.contact.linkedin:
+    if det.primary_linkedin and (not cv.contact.linkedin or not cv.contact.linkedin.strip()):
         cv.contact.linkedin = det.primary_linkedin
-    if det.primary_name and not cv.contact.name:
+    if det.primary_name and (not cv.contact.name or not cv.contact.name.strip()):
         cv.contact.name = det.primary_name
-    if det.location_hint and not cv.contact.location:
+    # Override obviously wrong locations (e.g., email copied into location).
+    if det.location_hint and (not cv.contact.location or not cv.contact.location.strip() or _is_probable_email(cv.contact.location)):
         cv.contact.location = det.location_hint
 
 

@@ -73,6 +73,7 @@ class LlmExtractor:
             payload["certifications"] = []
         elif isinstance(certifications, dict):
             payload["certifications"] = [certifications]
+        cleaned_certs: list[dict] = []
         for cert in payload["certifications"]:
             if not isinstance(cert, dict):
                 continue
@@ -82,6 +83,10 @@ class LlmExtractor:
                 cert["issuer"] = cert["institution"]
             if cert.get("expiryDate") is None and cert.get("expiration"):
                 cert["expiryDate"] = cert["expiration"]
+            # Drop placeholder/empty certification items.
+            if any((cert.get("title"), cert.get("issuer"), cert.get("issueDate"), cert.get("expiryDate"), cert.get("description"))):
+                cleaned_certs.append(cert)
+        payload["certifications"] = cleaned_certs
 
         achievement = payload.get("achievement")
         if achievement is None and payload.get("projects") is not None:
@@ -100,6 +105,13 @@ class LlmExtractor:
                 y = self._coerce_graduation_year(edu.get("year"))
                 if y is not None:
                     edu["dateGraduation"] = y
+        # Drop placeholder/empty education items.
+        if isinstance(payload.get("education"), list):
+            payload["education"] = [
+                e
+                for e in payload["education"]
+                if isinstance(e, dict) and any((e.get("institution"), e.get("establishment"), e.get("typeEducation"), e.get("dateGraduation")))
+            ]
 
         for exp in payload.get("experience") or []:
             if not isinstance(exp, dict):
@@ -109,11 +121,13 @@ class LlmExtractor:
             if exp.get("startDate") is None and exp.get("duration"):
                 exp["startDate"] = str(exp["duration"]).strip() or None
 
+        if "languages" in payload:
+            payload["languages"] = self._normalize_language_proficiencies(payload.get("languages"))
+
         skills = payload.get("skills")
         if isinstance(skills, dict):
             for key in ("technical", "soft"):
                 skills[key] = self._normalize_string_list(skills.get(key))
-            skills["languages"] = self._normalize_language_proficiencies(skills.get("languages"))
             cid = skills.get("catalogId")
             if cid is not None and isinstance(cid, str) and cid.strip().isdigit():
                 skills["catalogId"] = int(cid.strip())

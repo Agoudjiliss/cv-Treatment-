@@ -111,11 +111,12 @@ You MUST populate every field that exists in the CV. Do NOT return empty arrays 
 
 Schema:
 {{"contact":{{"name":"","email":"","phone":"","linkedin":"","location":""}},
+"languages":[{{"language":"ENGLISH","proficiency":"B2"}}],
 "education":[{{"institution":"","establishment":"","typeEducation":null,"dateGraduation":null}}],
 "experience":[{{"role":"","company":"","location":"","startDate":"","endDate":"","description":""}}],
 "certifications":[{{"title":"","issuer":"","issueDate":"","expiryDate":"","description":""}}],
 "achievement":[{{"projectName":"","description":"","startDate":null,"endDate":null}}],
-"skills":{{"technical":["Java","Python"],"soft":["Problem Solving"],"languages":[{{"language":"ENGLISH","proficiency":"B2"}}]}},
+"skills":{{"technical":["Java","Python"],"soft":["Problem Solving"]}},
 "summary":""}}
 
 IMPORTANT:

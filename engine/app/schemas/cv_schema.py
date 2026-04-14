@@ -50,7 +50,6 @@ class Skills(BaseModel):
         validation_alias=AliasChoices("catalogId", "catalog_id"),
         serialization_alias="catalogId",
     )
-    languages: List[LanguageProficiency] = Field(default_factory=list)
     technical: List[str] = Field(default_factory=list)
     soft: List[str] = Field(default_factory=list)
 
@@ -76,6 +75,7 @@ class CvExtractionResult(BaseModel):
     experience: List[ExperienceItem] = Field(default_factory=list)
     certifications: List[CertificationItem] = Field(default_factory=list)
     achievement: List[AchievementItem] = Field(default_factory=list)
+    languages: List[LanguageProficiency] = Field(default_factory=list)
     skills: Skills = Field(default_factory=Skills)
     summary: str | None = None
     confidence: float = 0.0
