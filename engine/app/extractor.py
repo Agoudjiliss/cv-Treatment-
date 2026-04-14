@@ -187,11 +187,13 @@ class LlmExtractor:
             if coerced is not None:
                 edu["dateGraduation"] = coerced
         # Drop placeholder/empty education items.
+        # Require at least institution OR establishment to be non-empty —
+        # typeEducation alone (e.g. "MASTER") is not enough to keep an entry.
         if isinstance(payload.get("education"), list):
             payload["education"] = [
                 e
                 for e in payload["education"]
-                if isinstance(e, dict) and any((e.get("institution"), e.get("establishment"), e.get("typeEducation"), e.get("dateGraduation")))
+                if isinstance(e, dict) and (e.get("institution") or e.get("establishment"))
             ]
 
         for exp in payload.get("experience") or []:
@@ -246,13 +248,23 @@ class LlmExtractor:
                 skills["catalogId"] = int(cid.strip())
         return payload
 
-    @staticmethod
-    def _normalize_date(value: str | None) -> str | None:
-        """Normalise any recognisable date to DD/MM/YYYY; leave others unchanged."""
+    _ONGOING_TERMS = re.compile(
+        r"^(?:current|present|today|now|ongoing|en\s+cours|actuel(?:le)?|jusqu'à\s+(?:ce\s+jour|aujourd'hui))$",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _normalize_date(cls, value: str | None) -> str | None:
+        """Normalise any recognisable date to DD/MM/YYYY; leave others unchanged.
+        "CURRENT" / "present" / "ongoing" → None (still active).
+        """
         if not value or not isinstance(value, str):
             return value
         v = value.strip()
         if not v:
+            return None
+        # Ongoing / still active → null
+        if cls._ONGOING_TERMS.fullmatch(v):
             return None
         # Already DD/MM/YYYY
         if re.fullmatch(r"\d{2}/\d{2}/\d{4}", v):

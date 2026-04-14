@@ -35,6 +35,26 @@ def compute_confidence(cv: CvExtractionResult) -> float:
     return round(filled / 9, 2)
 
 
+def _fill_summary(cv: CvExtractionResult) -> None:
+    """Build a minimal summary when the LLM didn't produce one."""
+    if cv.summary and cv.summary.strip():
+        return
+    parts: list[str] = []
+    name = (cv.contact.name or "").strip()
+    if name:
+        parts.append(name)
+    roles = list(dict.fromkeys(
+        e.role.strip() for e in cv.experience if e.role and e.role.strip()
+    ))
+    if roles:
+        parts.append(f"experienced as {', '.join(roles[:2])}")
+    tech = (cv.skills.technical or [])[:4]
+    if tech:
+        parts.append(f"skilled in {', '.join(tech)}")
+    if parts:
+        cv.summary = ". ".join(parts).capitalize() + "."
+
+
 def _is_probable_email(text: str) -> bool:
     t = (text or "").strip()
     return "@" in t and "." in t and " " not in t
@@ -125,6 +145,7 @@ async def run_cv_pipeline_async(
         cv = llm_res
 
     _merge_deterministic(cv, det, raw_text=raw_text)
+    _fill_summary(cv)
     sem_errors = semantic_validate(cv)
     if sem_errors:
         cv_errors.extend([f"semantic:{e}" for e in sem_errors])
