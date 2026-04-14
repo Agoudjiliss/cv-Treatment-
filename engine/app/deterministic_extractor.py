@@ -109,25 +109,33 @@ def format_anchor_block(d: DeterministicExtractions) -> str:
 
 def _normalize_phone(raw: str) -> str:
     s = raw.strip()
-    s = re.sub(r"^\+?\d{1,3}\)\s*", lambda m: m.group(0).replace(")", ""), s)
+    # Remove surrounding parentheses from country code: "(+213) 7..." → "+213 7..."
+    s = re.sub(r"^\((\+?\d{1,4})\)\s*", r"\1 ", s)
+    # Collapse multiple spaces
     s = re.sub(r"\s+", " ", s)
     return s
 
 
+_ADDRESS_LABEL_RE = re.compile(
+    r"\b(?:address|adresse|localisation|location|domicile|r[eé]sidence|ville)\s*:\s*([^|\n]+)",
+    re.IGNORECASE,
+)
+_ADDRESS_KEYWORD_RE = re.compile(
+    r"\b(?:address|adresse|localisation|location|domicile|r[eé]sidence)\b",
+    re.IGNORECASE,
+)
+
+
 def _extract_address_line(text: str) -> str:
-    # Prefer explicit "Address: ..." fragments even on mixed contact lines.
-    match = re.search(r"\baddress\s*:\s*([^|\n]+)", text, flags=re.IGNORECASE)
+    # Try "Address/Adresse/Localisation: ..." anywhere in the text first.
+    match = _ADDRESS_LABEL_RE.search(text)
     if match:
         return match.group(1).strip()
     for line in text.splitlines():
-        lower = line.lower()
-        if "address" in lower or "location" in lower:
-            addr_match = re.search(r"\baddress\s*:\s*([^|\n]+)", line, flags=re.IGNORECASE)
-            if addr_match:
-                return addr_match.group(1).strip()
-            loc_match = re.search(r"\blocation\s*:\s*([^|\n]+)", line, flags=re.IGNORECASE)
-            if loc_match:
-                return loc_match.group(1).strip()
+        if _ADDRESS_KEYWORD_RE.search(line):
+            m = _ADDRESS_LABEL_RE.search(line)
+            if m:
+                return m.group(1).strip()
             parts = line.split(":", 1)
             return parts[1].strip() if len(parts) == 2 else line.strip()
     return ""
@@ -135,20 +143,27 @@ def _extract_address_line(text: str) -> str:
 
 def _guess_name_line(text: str) -> str:
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    blacklist = (
-        "phone",
-        "email",
-        "address",
-        "website",
-        "experience",
-        "education",
-        "skills",
-        "work",
-        "summary",
+    # Use word-boundary checks to avoid short tokens matching unrelated words.
+    _BLACKLIST_EXACT = {
+        "phone", "mobile", "email", "address", "website", "web",
+        "experience", "education", "skills", "work", "summary", "linkedin",
+        "github", "portfolio", "objective", "contact",
+        "téléphone", "telephone", "portable", "courriel", "adresse", "site",
+        "profil", "expérience", "formation", "compétence", "competence",
+        "langues", "projets", "présentation", "presentation", "objectif",
+        "nationalité", "nationalite", "permis", "naissance", "sexe", "genre",
+    }
+    # Short tokens that need word-boundary protection
+    _BLACKLIST_PATTERN = re.compile(
+        r"\b(?:né(?:\s+le)?|nee|cv|tel|tél|fax)\b",
+        re.IGNORECASE,
     )
-    for line in lines[:10]:
+
+    for line in lines[:12]:
         lower = line.lower()
-        if any(b in lower for b in blacklist):
+        if any(b in lower for b in _BLACKLIST_EXACT):
+            continue
+        if _BLACKLIST_PATTERN.search(lower):
             continue
         if ":" in line and "|" not in line:
             continue
@@ -189,14 +204,76 @@ SOFT_KEYWORDS = [
     "adaptability",
 ]
 
-LANG_KEYWORDS = ["english", "french", "arabic", "spanish", "german", "italian"]
+LANG_KEYWORDS = [
+    "english", "french", "arabic", "spanish", "german", "italian",
+    "portuguese", "chinese", "mandarin", "dutch", "russian", "turkish",
+    "japanese", "korean", "hindi", "persian", "farsi", "urdu",
+    "swedish", "norwegian", "danish", "polish", "czech", "romanian",
+]
+
+# French / local names for each language → canonical English key for _LANG_NORMALIZE lookup.
+# Each tuple: (pattern_string, canonical_english_name_matching_LANG_KEYWORDS)
+_LANG_LOCAL_ALIASES: list[tuple[str, str]] = [
+    # French names of languages
+    (r"anglais", "english"),
+    (r"fran[çc]ais", "french"),
+    (r"arabe", "arabic"),
+    (r"espagnol", "spanish"),
+    (r"allemand", "german"),
+    (r"italien", "italian"),
+    (r"portugais", "portuguese"),
+    (r"chinois", "chinese"),
+    (r"n[eé]erlandais", "dutch"),
+    (r"russe", "russian"),
+    (r"turc", "turkish"),
+    (r"japonais", "japanese"),
+    (r"cor[eé]en", "korean"),
+    (r"polonais", "polish"),
+    (r"roumain", "romanian"),
+    (r"su[eé]dois", "swedish"),
+    (r"norv[eé]gien", "norwegian"),
+    (r"danois", "danish"),
+    (r"tch[eè]que", "czech"),
+    (r"hindi", "hindi"),
+    # Arabic names / transliterations
+    (r"[Ee]nglish", "english"),
+    (r"عربية|عربي", "arabic"),
+    (r"إنجليزي|انجليزي", "english"),
+    (r"فرنسي|فرنسية", "french"),
+]
+
+_LANG_LOCAL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b" + pat + r"\b", re.IGNORECASE | re.UNICODE), canonical)
+    for pat, canonical in _LANG_LOCAL_ALIASES
+]
+
+# Compiled word-boundary patterns for each language keyword (avoids "french fries" → FRENCH).
+_LANG_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    (lang, re.compile(r"\b" + re.escape(lang) + r"\b", re.IGNORECASE))
+    for lang in LANG_KEYWORDS
+]
 
 
 def keyword_skills(lower_text: str) -> tuple[list[str], list[str], list[str]]:
     def present(keys: list[str]) -> list[str]:
         return [k for k in keys if k in lower_text]
 
-    return present(TECH_KEYWORDS), present(SOFT_KEYWORDS), present(LANG_KEYWORDS)
+    seen: set[str] = set()
+    langs: list[str] = []
+
+    # English language names (word-boundary safe)
+    for lang, pat in _LANG_PATTERNS:
+        if pat.search(lower_text) and lang not in seen:
+            seen.add(lang)
+            langs.append(lang)
+
+    # French / local language names → resolved to English canonical name
+    for pat, canonical in _LANG_LOCAL_PATTERNS:
+        if pat.search(lower_text) and canonical not in seen:
+            seen.add(canonical)
+            langs.append(canonical)
+
+    return present(TECH_KEYWORDS), present(SOFT_KEYWORDS), langs
 
 
 def _spacy_person_names(text: str) -> list[str]:

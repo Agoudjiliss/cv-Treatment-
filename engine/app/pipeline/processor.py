@@ -68,6 +68,12 @@ _LANG_NATIVE_HINT_RE = re.compile(
 _LANG_NORMALIZE = {
     "english": "ENGLISH", "french": "FRENCH", "arabic": "ARABIC",
     "spanish": "SPANISH", "german": "GERMAN", "italian": "ITALIAN",
+    "portuguese": "PORTUGUESE", "chinese": "CHINESE", "mandarin": "CHINESE",
+    "dutch": "DUTCH", "russian": "RUSSIAN", "turkish": "TURKISH",
+    "japanese": "JAPANESE", "korean": "KOREAN", "hindi": "HINDI",
+    "persian": "PERSIAN", "farsi": "PERSIAN", "urdu": "URDU",
+    "swedish": "SWEDISH", "norwegian": "NORWEGIAN", "danish": "DANISH",
+    "polish": "POLISH", "czech": "CZECH", "romanian": "ROMANIAN",
 }
 
 

@@ -83,22 +83,45 @@ _KEYWORD_CATALOG_MAP: list[tuple[str, int]] = [
 
 
 _CV_SECTION_HEADERS = re.compile(
-    r"^(?:work\s+experience|experience(?:s)?|professional\s+experience|employment|"
-    r"education(?:\s+&\s+training)?|formation|parcours\s+(?:académique|professionnel)|"
-    r"skills?|compétences?|languages?|langues?|projects?|achievements?|certifications?|"
-    r"summary|profil|objective|about\s+me|contact)\s*$",
+    r"^(?:"
+    # EXPERIENCE
+    r"work\s+experience|professional\s+experience|employment|experience(?:s)?|"
+    r"exp[eé]riences?\s*(?:professionnelles?)?|parcours\s+professionnel|historique\s+professionnel|"
+    # EDUCATION
+    r"education(?:\s+&\s+training)?|training|academic\s+background|"
+    r"[eé]ducation|formation(?:s)?|[eé]tudes?|dipl[oô]mes?|cursus|parcours\s+acad[eé]mique|"
+    # SKILLS
+    r"skills?|technical\s+skills?|core\s+competencies|"
+    r"comp[eé]tences?(?:\s+(?:techniques?|professionnelles?|cl[eé]s?))?|savoir[-\s]faire|aptitudes?|"
+    # LANGUAGES
+    r"languages?|language\s+skills?|langues?(?:\s+[eé]trang[eè]res?)?|"
+    r"comp[eé]tences?\s+linguistiques?|"
+    # PROJECTS / ACHIEVEMENTS
+    r"projects?|achievements?|accomplishments?|portfolio|r[eé]alisations?|projets?|contributions?|"
+    # CERTIFICATIONS
+    r"certifications?|certificates?|"
+    # SUMMARY / PROFILE
+    r"summary|profile|objective|about\s+me|"
+    r"profil(?:\s+professionnel)?|pr[eé]sentation|objectif(?:\s+professionnel)?|synth[eè]se|"
+    # CONTACT / INTERESTS
+    r"contact|informations?\s+(?:personnelles?|de\s+contact)|coordonn[eé]es?|"
+    r"interests?|hobbies?|centres?\s+d.int[eé]r[eê]t|loisirs?"
+    r")\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
-# Priority order: sections we most need the LLM to see.
+# Priority: sections we most need the LLM to see (earlier = higher priority).
 _SECTION_PRIORITY = [
-    "contact", "profil", "about", "summary", "objective",
-    "work experience", "experience", "professional experience", "employment",
-    "education", "formation",
-    "skills", "compétences",
-    "projects", "achievements",
-    "languages", "langues",
+    "contact", "informations", "coordonn", "profil", "pr\u00e9sentation",
+    "about", "summary", "objective", "synth", "objectif",
+    "work experience", "experience", "exp\u00e9rience", "parcours professionnel",
+    "professional experience", "employment",
+    "education", "formation", "\u00e9tudes", "dipl\u00f4me", "cursus",
+    "skills", "comp\u00e9tence", "savoir", "aptitude",
+    "projects", "achievement", "r\u00e9alisation", "contribution",
+    "languages", "langues", "linguistique",
     "certifications",
+    "interests", "loisirs", "centres",
 ]
 
 
@@ -476,27 +499,108 @@ class LlmExtractor:
                 out.append(item)
         return out
 
+    # Map any string the LLM returns to the canonical uppercase language key.
+    _LANG_ALIASES: dict[str, str] = {
+        # English variants
+        "english": "ENGLISH", "anglais": "ENGLISH", "inglés": "ENGLISH",
+        "inglese": "ENGLISH", "englisch": "ENGLISH",
+        # French variants
+        "french": "FRENCH", "français": "FRENCH", "francais": "FRENCH",
+        "français": "FRENCH", "francés": "FRENCH", "francese": "FRENCH",
+        "französisch": "FRENCH",
+        # Arabic variants
+        "arabic": "ARABIC", "arabe": "ARABIC", "árabe": "ARABIC",
+        "arabisch": "ARABIC", "العربية": "ARABIC",
+        # Spanish variants
+        "spanish": "SPANISH", "espagnol": "SPANISH", "español": "SPANISH",
+        "spagnolo": "SPANISH", "spanisch": "SPANISH",
+        # German variants
+        "german": "GERMAN", "allemand": "GERMAN", "alemán": "GERMAN",
+        "tedesco": "GERMAN", "deutsch": "GERMAN",
+        # Italian variants
+        "italian": "ITALIAN", "italien": "ITALIAN", "italiano": "ITALIAN",
+        "italienisch": "ITALIAN",
+        # Portuguese variants
+        "portuguese": "PORTUGUESE", "portugais": "PORTUGUESE",
+        "português": "PORTUGUESE", "portugués": "PORTUGUESE",
+        # Chinese variants
+        "chinese": "CHINESE", "mandarin": "CHINESE", "chinois": "CHINESE",
+        "中文": "CHINESE", "普通话": "CHINESE",
+        # Dutch
+        "dutch": "DUTCH", "néerlandais": "DUTCH", "neerlandais": "DUTCH",
+        "niederländisch": "DUTCH", "nederlands": "DUTCH",
+        # Russian
+        "russian": "RUSSIAN", "russe": "RUSSIAN", "русский": "RUSSIAN",
+        # Turkish
+        "turkish": "TURKISH", "turc": "TURKISH", "türkçe": "TURKISH",
+        # Others
+        "japanese": "JAPANESE", "japonais": "JAPANESE", "日本語": "JAPANESE",
+        "korean": "KOREAN", "coréen": "KOREAN", "한국어": "KOREAN",
+        "hindi": "HINDI", "हिन्दी": "HINDI",
+    }
+
+    # Map free-text proficiency to canonical CEFR / system value.
+    _PROFICIENCY_ALIASES: dict[str, str] = {
+        # CEFR already canonical (case-insensitive)
+        "a1": "A1", "a2": "A2", "b1": "B1", "b2": "B2", "c1": "C1", "c2": "C2",
+        "native": "NATIVE", "natif": "NATIVE", "nativo": "NATIVE",
+        "langue maternelle": "NATIVE", "mother tongue": "NATIVE",
+        "bilingue": "NATIVE", "bilingual": "NATIVE",
+        # Descriptive levels → approximate CEFR
+        "beginner": "A1", "débutant": "A1", "basic": "A1",
+        "elementary": "A2", "pre-intermediate": "A2",
+        "intermediate": "B1", "intermédiaire": "B1",
+        "upper intermediate": "B2", "upper-intermediate": "B2",
+        "advanced": "C1", "avancé": "C1", "avance": "C1",
+        "proficient": "C1", "fluent": "C1", "courant": "C1",
+        "highly proficient": "C2", "mastery": "C2", "expert": "C2",
+        "professional": "C1", "professional working": "B2",
+        "full professional": "C1", "working": "B2",
+        "limited working": "B1", "limited": "A2",
+        "conversational": "B1",
+        "good": "B1", "very good": "B2", "excellent": "C1",
+        "notions": "A1", "notion": "A1",
+    }
+
+    @classmethod
+    def _normalize_lang_name(cls, raw: str) -> str:
+        """Return uppercase canonical language key, or the original uppercased if unknown."""
+        key = raw.strip().lower()
+        return cls._LANG_ALIASES.get(key, raw.strip().upper())
+
+    @classmethod
+    def _normalize_proficiency(cls, raw: str | None) -> str | None:
+        if not raw or not isinstance(raw, str):
+            return None
+        key = raw.strip().lower()
+        return cls._PROFICIENCY_ALIASES.get(key, raw.strip().upper() if len(raw.strip()) <= 6 else None)
+
     def _normalize_language_proficiencies(self, values) -> list[dict]:
         if values is None:
             return []
         if not isinstance(values, list):
             values = [values]
         out: list[dict] = []
+        seen: set[str] = set()
         for item in values:
             if isinstance(item, str):
-                text = item.strip()
-                if text:
-                    out.append({"language": text, "proficiency": None})
+                lang = self._normalize_lang_name(item.strip())
+                if lang and lang not in seen:
+                    seen.add(lang)
+                    out.append({"language": lang, "proficiency": None})
                 continue
             if isinstance(item, dict):
-                lang = item.get("language") or item.get("name") or item.get("label")
-                if isinstance(lang, str) and lang.strip():
-                    out.append(
-                        {
-                            "language": lang.strip(),
-                            "proficiency": item.get("proficiency"),
-                        }
-                    )
+                raw_lang = item.get("language") or item.get("name") or item.get("label") or ""
+                if not isinstance(raw_lang, str) or not raw_lang.strip():
+                    continue
+                lang = self._normalize_lang_name(raw_lang)
+                if not lang or lang in seen:
+                    continue
+                seen.add(lang)
+                out.append({
+                    "language": lang,
+                    "proficiency": self._normalize_proficiency(item.get("proficiency")),
+                })
         return out
 
     def _normalize_string_list(self, values) -> list[str]:
