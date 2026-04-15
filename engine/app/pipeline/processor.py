@@ -7,6 +7,7 @@ import time
 from app.deterministic_extractor import DeterministicExtractions, extract_deterministic, format_anchor_block, keyword_skills
 from app.extractor import LlmExtractor
 from app.ocr import OcrEngine
+from app.parser_utils import DateExtractor
 from app.pipeline.validator import semantic_validate
 from app.schemas import CvExtractionResult, LanguageProficiency
 
@@ -92,6 +93,75 @@ def _detect_native_languages(raw_text: str) -> set[str]:
     return native
 
 
+def _evidence_languages(raw_text: str) -> tuple[set[str], set[str]]:
+    """Return (all_detected_lang_keys, native_lang_keys) from OCR text evidence."""
+    _, _, det_langs = keyword_skills((raw_text or "").lower())
+    detected = {_LANG_NORMALIZE.get(l.lower(), l.upper()) for l in det_langs}
+    native = _detect_native_languages(raw_text or "")
+    return detected, native
+
+
+def _filter_languages_by_evidence(cv: CvExtractionResult, raw_text: str) -> None:
+    """Keep only languages that are supported by OCR evidence, and add missing evidenced ones.
+
+    This reduces LLM hallucinations like ENGLISH/FRENCH when CV lists ITALIAN/SPANISH.
+    If we have no evidence at all, we keep the model output unchanged.
+    """
+    detected, native = _evidence_languages(raw_text)
+    if not detected:
+        return
+
+    # Keep only languages that are in detected set.
+    kept: list[LanguageProficiency] = []
+    seen: set[str] = set()
+    for lp in cv.languages:
+        lang = (lp.language or "").strip().upper()
+        if not lang or lang not in detected:
+            continue
+        if lang in seen:
+            continue
+        seen.add(lang)
+        # If OCR evidence suggests native, upgrade proficiency.
+        prof = "NATIVE" if lang in native else lp.proficiency
+        kept.append(LanguageProficiency(language=lang, proficiency=prof))
+
+    # Add missing evidenced languages not produced by LLM.
+    for lang in sorted(detected):
+        if lang in seen:
+            continue
+        prof = "NATIVE" if lang in native else None
+        kept.append(LanguageProficiency(language=lang, proficiency=prof))
+        seen.add(lang)
+
+    cv.languages = kept
+
+
+def _sanitize_experience_dates_by_evidence(cv: CvExtractionResult, raw_text: str) -> None:
+    """Remove experience dates that do not appear in OCR text.
+
+    LLM can sometimes mix dates between different experiences; it's safer to null
+    questionable dates than return incorrect ones.
+    """
+    if not raw_text or not cv.experience:
+        return
+    # Use raw text search and extracted ranges as evidence.
+    text = raw_text
+    date_extractor = DateExtractor()
+    ranges = date_extractor.extract_ranges(text)
+    range_blob = " ".join(span.raw for span in ranges)
+    for exp in cv.experience:
+        for key in ("startDate", "endDate"):
+            val = getattr(exp, key, None)
+            if not val or not isinstance(val, str):
+                continue
+            v = val.strip()
+            if not v:
+                continue
+            # Evidence: exact substring exists in raw text OR appears in some extracted range.
+            if v not in text and v not in range_blob:
+                setattr(exp, key, None)
+
+
 def _merge_deterministic(cv: CvExtractionResult, det: DeterministicExtractions, raw_text: str = "") -> None:
     """Override contact fields with high-confidence deterministic values."""
     if det.primary_email and (not cv.contact.email or not cv.contact.email.strip()):
@@ -106,17 +176,10 @@ def _merge_deterministic(cv: CvExtractionResult, det: DeterministicExtractions, 
     if det.location_hint and (not cv.contact.location or not cv.contact.location.strip() or _is_probable_email(cv.contact.location)):
         cv.contact.location = det.location_hint
 
-    # Merge languages the LLM missed, using keyword detection.
+    # Prefer OCR evidence for languages (add missing + drop hallucinations).
     if raw_text:
-        _, _, det_langs = keyword_skills(raw_text.lower())
-        existing = {(lp.language or "").upper() for lp in cv.languages}
-        native_langs = _detect_native_languages(raw_text)
-        for lang_raw in det_langs:
-            lang_key = _LANG_NORMALIZE.get(lang_raw.lower(), lang_raw.upper())
-            if lang_key not in existing:
-                proficiency = "NATIVE" if lang_key in native_langs else None
-                cv.languages.append(LanguageProficiency(language=lang_key, proficiency=proficiency))
-                existing.add(lang_key)
+        _filter_languages_by_evidence(cv, raw_text)
+        _sanitize_experience_dates_by_evidence(cv, raw_text)
 
 
 async def run_cv_pipeline_async(
@@ -127,7 +190,7 @@ async def run_cv_pipeline_async(
         raw_text = await asyncio.to_thread(ocr_engine.extract_text_from_pdf_bytes, pdf_bytes)
     except Exception as exc:
         cv = CvExtractionResult()
-        cv.meta = {"error": f"ocr_failed: {exc}"}
+        cv.meta = {"error": f"ocr_failed: {exc}", "time_ocr_ms": int((time.monotonic() - t0) * 1000)}
         cv.confidence = compute_confidence(cv)
         return cv
     time_ocr_ms = int((time.monotonic() - t0) * 1000)
@@ -154,15 +217,16 @@ async def run_cv_pipeline_async(
     except Exception as _llm_exc:
         llm_res = _llm_exc
     time_llm_ms = int((time.monotonic() - t2) * 1000)
-    time_combined_ms = time_det_ms + time_llm_ms
 
     t3 = time.monotonic()
     cv_errors: list[str] = []
+    llm_used = False
     if isinstance(llm_res, Exception):
         cv = CvExtractionResult()
         cv_errors.append(f"llm_failed: {llm_res}")
     else:
         cv = llm_res
+        llm_used = True
 
     _merge_deterministic(cv, det, raw_text=raw_text)
     _fill_summary(cv)
@@ -176,9 +240,14 @@ async def run_cv_pipeline_async(
     meta: dict = dict(cv.meta) if isinstance(cv.meta, dict) else {}
     meta.update({
         "time_ocr_ms": time_ocr_ms,
-        "time_det_ms": time_det_ms,
-        "time_llm_ms": time_combined_ms,
+        # Preferred key names
+        "time_deterministic_ms": time_det_ms,
+        "time_llm_ms": time_llm_ms,
         "time_postprocess_ms": time_postprocess_ms,
+        "llm_used": llm_used,
+
+        # Backward-compatible aliases
+        "time_det_ms": time_det_ms,
     })
     if cv_errors:
         meta["errors"] = cv_errors[:20]

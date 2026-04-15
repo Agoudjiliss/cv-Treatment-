@@ -6,6 +6,7 @@ import com.example.cvgateway.dto.CvResultMessage;
 import com.example.cvgateway.exception.DownstreamServiceException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.UUID;
@@ -26,6 +27,7 @@ public class CvParseService {
     private final RabbitTemplate rabbitTemplate;
     private final ObjectMapper objectMapper;
     private final CvParsePendingRegistry pendingRegistry;
+    private final MeterRegistry meterRegistry;
     private final String parseExchange;
     private final String parseQueue;
     private final long timeoutSeconds;
@@ -34,18 +36,21 @@ public class CvParseService {
             RabbitTemplate rabbitTemplate,
             ObjectMapper objectMapper,
             CvParsePendingRegistry pendingRegistry,
+            MeterRegistry meterRegistry,
             @Value("${cv.rabbit.exchange}") String parseExchange,
             @Value("${cv.rabbit.parse-queue}") String parseQueue,
             @Value("${cv.parse.timeout-seconds}") long timeoutSeconds) {
         this.rabbitTemplate = rabbitTemplate;
         this.objectMapper = objectMapper;
         this.pendingRegistry = pendingRegistry;
+        this.meterRegistry = meterRegistry;
         this.parseExchange = parseExchange;
         this.parseQueue = parseQueue;
         this.timeoutSeconds = timeoutSeconds;
     }
 
     public JsonNode processCv(MultipartFile file, String correlationId) {
+        long started = System.currentTimeMillis();
         CompletableFuture<CvResultMessage> future = new CompletableFuture<>();
         pendingRegistry.register(correlationId, future);
         try {
@@ -58,17 +63,22 @@ public class CvParseService {
                     .build();
             String payload = objectMapper.writeValueAsString(job);
             publishWithRetry(payload);
+            meterRegistry.counter("cv.parse.enqueued").increment();
 
             CvResultMessage result = future.get(timeoutSeconds, TimeUnit.SECONDS);
             if (!"ok".equalsIgnoreCase(result.getStatus())) {
+                meterRegistry.counter("cv.parse.failed").increment();
                 String err = result.getError() != null ? result.getError() : "Unknown worker error";
                 throw new DownstreamServiceException("CV parsing failed: " + err);
             }
             if (result.getResult() == null || result.getResult().isNull()) {
+                meterRegistry.counter("cv.parse.empty_result").increment();
                 throw new DownstreamServiceException("CV parsing returned empty result");
             }
+            meterRegistry.counter("cv.parse.succeeded").increment();
             return result.getResult();
         } catch (TimeoutException ex) {
+            meterRegistry.counter("cv.parse.timeout").increment();
             ApiErrorResponse err = ApiErrorResponse.builder()
                     .correlationId(correlationId)
                     .error("CV parsing timed out")
@@ -78,8 +88,10 @@ public class CvParseService {
         } catch (DownstreamServiceException ex) {
             throw ex;
         } catch (Exception ex) {
+            meterRegistry.counter("cv.parse.enqueue_error").increment();
             throw new DownstreamServiceException("Failed to enqueue CV parse job", ex);
         } finally {
+            meterRegistry.timer("cv.parse.request.ms").record(System.currentTimeMillis() - started, java.util.concurrent.TimeUnit.MILLISECONDS);
             pendingRegistry.discard(correlationId);
         }
     }

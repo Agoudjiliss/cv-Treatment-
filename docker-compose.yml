@@ -89,14 +89,15 @@ services:
       OLLAMA_NUM_PREDICT: "2048"
       OLLAMA_LLAMA_NUM_THREAD: "4"
       OLLAMA_NUM_CTX: "8192"
-      OLLAMA_TIMEOUT_SECONDS: 300
+      # Keep below gateway parse timeout to avoid gateway hanging after engine times out.
+      OLLAMA_TIMEOUT_SECONDS: 240
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
       RABBITMQ_USER: ${RABBITMQ_USER:-cvuser}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-cvpass}
       CV_PARSE_QUEUE: cv_parse_queue
       CV_RESULT_QUEUE: cv_result_queue
-      ENABLE_RABBIT_CONSUMER: "true"
+      ENABLE_RABBIT_CONSUMER: "false"
     ports:
       - "8000:8000"
     depends_on:
@@ -113,6 +114,39 @@ services:
     networks:
       - cv-net
 
+  engine-worker:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    container_name: cv-engine-worker
+    environment:
+      # Worker parallelism is controlled by Rabbit prefetch and the worker pool (see rabbit_worker.py).
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      RABBITMQ_PREFETCH: "2"
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      OLLAMA_NUM_PREDICT: "2048"
+      OLLAMA_LLAMA_NUM_THREAD: "4"
+      OLLAMA_NUM_CTX: "8192"
+      OLLAMA_TIMEOUT_SECONDS: 240
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-cvuser}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-cvpass}
+      CV_PARSE_QUEUE: cv_parse_queue
+      CV_RESULT_QUEUE: cv_result_queue
+      ENABLE_RABBIT_CONSUMER: "true"
+    command: ["python", "-m", "app.worker_main"]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    networks:
+      - cv-net
+
   gateway:
     build:
       context: ./gateway
@@ -126,6 +160,7 @@ services:
       CV_PARSE_QUEUE: cv_parse_queue
       CV_RESULT_QUEUE: cv_result_queue
       CV_DLQ_QUEUE: cv_parse_dlq
+      # End-to-end parse budget (OCR + LLM + postprocess + queue jitter).
       CV_PARSE_TIMEOUT_SECONDS: 420
       CV_ENGINE_HEALTH_URL: http://engine:8000/health/ready
       PYTHON_ENGINE_BASE_URL: http://engine:8000
@@ -139,6 +174,8 @@ services:
         condition: service_healthy
       engine:
         condition: service_healthy
+      engine-worker:
+        condition: service_started
       elasticsearch:
         condition: service_healthy
     healthcheck:

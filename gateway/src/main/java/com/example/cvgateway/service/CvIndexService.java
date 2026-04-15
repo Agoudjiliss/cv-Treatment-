@@ -3,7 +3,12 @@ package com.example.cvgateway.service;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch.core.IndexRequest;
 import com.fasterxml.jackson.databind.JsonNode;
+import java.time.LocalDate;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -21,6 +26,7 @@ public class CvIndexService {
 
     private final EmbeddingCacheService embeddingCacheService;
     private final ElasticsearchClient elasticsearchClient;
+    private static final DateTimeFormatter DMY = DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
     @Value("${cv.index.index-name}")
     private String indexName;
@@ -75,35 +81,76 @@ public class CvIndexService {
 
     private List<String> extractLanguages(JsonNode cvJson) {
         List<String> out = new ArrayList<>();
-        JsonNode t = cvJson.path("skills").path("languages");
+        JsonNode t = cvJson.path("languages");
         if (t.isArray()) {
-            t.forEach(n -> out.add(n.asText("")));
+            t.forEach(n -> {
+                String lang = n.path("language").asText("");
+                if (!lang.isBlank()) {
+                    out.add(lang);
+                }
+            });
         }
         return out;
     }
 
     private int estimateSeniority(JsonNode cvJson) {
-        int years = 0;
+        long totalMonths = 0;
         JsonNode exp = cvJson.path("experience");
         if (exp.isArray()) {
             for (JsonNode e : exp) {
-                String duration = e.path("duration").asText("");
-                if (duration.contains("20")) {
-                    years += 1;
+                LocalDate start = parseDate(e.path("startDate").asText(""));
+                LocalDate end = parseDate(e.path("endDate").asText(""));
+                if (start == null) {
+                    continue;
+                }
+                if (end == null) {
+                    end = LocalDate.now(ZoneOffset.UTC);
+                }
+                if (end.isBefore(start)) {
+                    continue;
+                }
+                long months = ChronoUnit.MONTHS.between(start.withDayOfMonth(1), end.withDayOfMonth(1));
+                if (months >= 0 && months < 12 * 70) {
+                    totalMonths += months;
                 }
             }
         }
-        return years;
+        return (int) Math.max(0, Math.min(70, totalMonths / 12));
     }
 
     private String extractCountry(JsonNode cvJson) {
         String loc = cvJson.path("contact").path("location").asText("");
-        if (loc.toUpperCase().contains("ALGERIA")) {
+        String u = loc == null ? "" : loc.toUpperCase();
+        if (u.contains("ALGERIA") || u.contains("ALGÉRIE") || u.contains("ALGERIE") || u.contains("DZ") || u.contains("ALGIERS") || u.contains("ALGER")) {
             return "DZ";
         }
-        if (loc.toUpperCase().contains("FRANCE")) {
+        if (u.contains("FRANCE") || u.contains("PARIS") || u.contains("LYON") || u.contains("MARSEILLE") || u.contains("FR")) {
             return "FR";
         }
         return "";
+    }
+
+    private LocalDate parseDate(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String v = raw.trim();
+        if (v.isBlank()) {
+            return null;
+        }
+        try {
+            if (v.matches("^\\d{2}/\\d{2}/\\d{4}$")) {
+                return LocalDate.parse(v, DMY);
+            }
+            if (v.matches("^\\d{2}/\\d{4}$")) {
+                return LocalDate.parse("01/" + v, DMY);
+            }
+            if (v.matches("^\\d{4}$")) {
+                return LocalDate.of(Integer.parseInt(v), 1, 1);
+            }
+        } catch (DateTimeParseException | NumberFormatException ignored) {
+            return null;
+        }
+        return null;
     }
 }

@@ -35,23 +35,25 @@ public class CvMatchService {
         long started = System.currentTimeMillis();
         List<Map<String, Object>> filtered = cvFilterService.filterCandidates(request);
         float[] jobEmbedding = embeddingCacheService.embedText(request.getJobDescription());
-        List<Map<String, Object>> top200 = filtered.stream()
-                .sorted((a, b) -> Double.compare(score(jobEmbedding, vector(b)), score(jobEmbedding, vector(a))))
+        int topK = Math.max(1, request.getTopK());
+
+        // Score each candidate once, sort once.
+        record ScoredDoc(Map<String, Object> doc, double score) {}
+        List<ScoredDoc> scored = filtered.stream()
+                .map(d -> new ScoredDoc(d, score(jobEmbedding, vector(d))))
+                .sorted(Comparator.comparingDouble(ScoredDoc::score).reversed())
                 .limit(200)
                 .toList();
 
-        List<Map<String, Object>> topK = top200.stream()
-                .sorted((a, b) -> Double.compare(score(jobEmbedding, vector(b)), score(jobEmbedding, vector(a))))
-                .limit(request.getTopK())
-                .toList();
+        List<ScoredDoc> top = scored.subList(0, Math.min(topK, scored.size()));
 
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             List<CompletableFuture<CvMatchResult>> futures = new ArrayList<>();
             int rank = 1;
-            for (Map<String, Object> doc : topK) {
+            for (ScoredDoc sd : top) {
                 int currentRank = rank++;
                 futures.add(CompletableFuture.supplyAsync(
-                        () -> buildResult(request, doc, jobEmbedding, currentRank), executor));
+                        () -> buildResult(request, sd.doc(), jobEmbedding, currentRank, sd.score()), executor));
             }
             List<CvMatchResult> results = futures.stream().map(CompletableFuture::join)
                     .sorted(Comparator.comparingInt(CvMatchResult::getRank))
@@ -65,9 +67,7 @@ public class CvMatchService {
         }
     }
 
-    private CvMatchResult buildResult(JobMatchRequest req, Map<String, Object> doc, float[] jobEmbedding, int rank) {
-        float[] cvVector = vector(doc);
-        double s = score(jobEmbedding, cvVector);
+    private CvMatchResult buildResult(JobMatchRequest req, Map<String, Object> doc, float[] jobEmbedding, int rank, double s) {
         JsonNode cvJson = objectMapper.valueToTree(doc.getOrDefault("cvJson", Map.of()));
         List<String> skills = extractSkills(cvJson);
         List<String> matched = req.getRequiredSkills().stream().filter(r -> skills.stream().anyMatch(sv -> sv.equalsIgnoreCase(r))).toList();

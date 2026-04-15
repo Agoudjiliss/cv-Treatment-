@@ -3,6 +3,7 @@ package com.example.cvgateway.listener;
 import com.example.cvgateway.dto.CvResultMessage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -17,6 +18,7 @@ public class CvParseDlqListener {
 
     private final ObjectMapper objectMapper;
     private final RabbitTemplate rabbitTemplate;
+    private final MeterRegistry meterRegistry;
 
     @Value("${cv.rabbit.result-queue}")
     private String resultQueue;
@@ -27,6 +29,7 @@ public class CvParseDlqListener {
             JsonNode n = objectMapper.readTree(body);
             String correlationId = n.path("correlationId").asText("");
             log.error("Message moved to DLQ, correlationId={}", correlationId);
+            meterRegistry.counter("cv.parse.dlq").increment();
             CvResultMessage error = CvResultMessage.builder()
                     .correlationId(correlationId)
                     .status("error")
@@ -34,6 +37,7 @@ public class CvParseDlqListener {
                     .build();
             rabbitTemplate.convertAndSend("", resultQueue, objectMapper.writeValueAsString(error));
         } catch (Exception ex) {
+            meterRegistry.counter("cv.parse.dlq.handler_error").increment();
             log.error("Failed handling DLQ message", ex);
         }
     }

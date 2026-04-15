@@ -37,7 +37,8 @@ llm_extractor = LlmExtractor(
 async def lifespan(app: FastAPI):
     # Warm up OCR in background to avoid blocking consumer startup.
     threading.Thread(target=ocr_engine.warmup, name="ocr-warmup", daemon=True).start()
-    if os.getenv("ENABLE_RABBIT_CONSUMER", "true").lower() in ("1", "true", "yes"):
+    # The HTTP API should stay lightweight; run Rabbit consumption in a dedicated worker process.
+    if os.getenv("ENABLE_RABBIT_CONSUMER", "false").lower() in ("1", "true", "yes"):
         rabbit_worker.start_rabbit_consumer_thread(ocr_engine, llm_extractor)
     yield
 
@@ -53,7 +54,7 @@ def health() -> dict[str, str]:
 
 @app.get("/health/ready")
 def health_ready() -> JSONResponse:
-    if os.getenv("ENABLE_RABBIT_CONSUMER", "true").lower() in ("1", "true", "yes"):
+    if os.getenv("ENABLE_RABBIT_CONSUMER", "false").lower() in ("1", "true", "yes"):
         if not rabbit_worker.consumer_ready.is_set():
             return JSONResponse(status_code=503, content={"status": "consumer_starting"})
         if rabbit_worker.consumer_thread is not None and not rabbit_worker.consumer_thread.is_alive():
