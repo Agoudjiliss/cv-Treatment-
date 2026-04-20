@@ -78,7 +78,10 @@ def extract_deterministic(text: str) -> DeterministicExtractions:
             out.other_urls.append(u)
 
     loc_cleaner = LocationCleaner()
-    out.location_hint = loc_cleaner.clean(_extract_address_line(cleaned) or blocks.get("CONTACT", ""))
+    # Location extraction: avoid feeding the whole CV when CONTACT segmentation fails.
+    # Prefer explicit address label, otherwise restrict to early header lines.
+    header_slice = "\n".join([ln for ln in cleaned.splitlines() if ln.strip()][:10])
+    out.location_hint = loc_cleaner.clean(_extract_address_line(cleaned) or blocks.get("CONTACT", "") or header_slice)
     out.person_name_candidates = _spacy_person_names(cleaned)
     out.primary_name = _guess_name_line(cleaned) or (
         out.person_name_candidates[0] if out.person_name_candidates else ""
@@ -111,6 +114,8 @@ def _normalize_phone(raw: str) -> str:
     s = raw.strip()
     # Remove surrounding parentheses from country code: "(+213) 7..." → "+213 7..."
     s = re.sub(r"^\((\+?\d{1,4})\)\s*", r"\1 ", s)
+    # Remove stray trailing parenthesis in country code: "+213) 7..." → "+213 7..."
+    s = re.sub(r"^(\+?\d{1,4})\)\s*", r"\1 ", s)
     # Collapse multiple spaces
     s = re.sub(r"\s+", " ", s)
     return s
@@ -158,12 +163,31 @@ def _guess_name_line(text: str) -> str:
         r"\b(?:né(?:\s+le)?|nee|cv|tel|tél|fax)\b",
         re.IGNORECASE,
     )
+    _TITLE_HINTS = re.compile(
+        r"\b(?:backend|développement|developpement|developer|développeur|"
+        r"engineer|ingénieur|intern|stagiaire|freelance|transformation)\b",
+        re.IGNORECASE,
+    )
+
+    def looks_like_person_name(line: str) -> bool:
+        # Heuristic: 2-4 words, mostly alphabetic, and at least two capitalized tokens.
+        toks = [t for t in re.split(r"\s+", line.replace("|", " ").strip()) if t]
+        if not (2 <= len(toks) <= 4):
+            return False
+        caps = sum(1 for t in toks if t[:1].isupper())
+        alpha = all(any(c.isalpha() for c in t) for t in toks)
+        return alpha and caps >= 2
 
     for line in lines[:12]:
         lower = line.lower()
         if any(b in lower for b in _BLACKLIST_EXACT):
             continue
         if _BLACKLIST_PATTERN.search(lower):
+            continue
+        # Skip job titles/objectives (common OCR mistake: using headline as name).
+        # Even if it "looks like" a name (2 capitalized tokens), words like "Backend"
+        # are overwhelmingly titles, not names.
+        if _TITLE_HINTS.search(lower):
             continue
         if ":" in line and "|" not in line:
             continue

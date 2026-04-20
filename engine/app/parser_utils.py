@@ -155,6 +155,23 @@ class LocationCleaner:
     def clean(self, raw: str) -> str:
         if not raw:
             return ""
+        # If OCR contact block leaks into this field, prefer a single plausible line.
+        if "\n" in raw:
+            for ln in (x.strip() for x in raw.splitlines() if x.strip()):
+                # Skip obvious non-location lines.
+                if "@" in ln:
+                    continue
+                if re.fullmatch(r"^\(?\+?\d[\d\s()\-]{6,}$", ln):
+                    continue
+                # Skip spaced-letter section headers like "C O N T A C T".
+                if re.fullmatch(r"(?:[A-Za-zÀ-ÿ]\s+){3,}[A-Za-zÀ-ÿ]", ln):
+                    continue
+                if any(tok in ln.lower() for tok in ("objectif", "compétence", "competence", "education", "expérience", "experience")):
+                    continue
+                if len(ln) > 80:
+                    continue
+                raw = ln
+                break
         addr_match = self._ADDR_LABEL_RE.search(raw)
         if addr_match:
             candidate = addr_match.group(1).strip()
@@ -163,6 +180,9 @@ class LocationCleaner:
         candidate = self.NOISE_RE.sub("", candidate).strip(" :-|")
         candidate = re.sub(r"^\(?\+?\d[\d\s()\-]{6,}$", "", candidate).strip()
         candidate = re.sub(r"\s{2,}", " ", candidate)
+        # Guardrail: drop multi-line/too-long candidates (usually OCR leakage).
+        if "\n" in candidate or len(candidate) > 70:
+            return ""
         return candidate
 
 
@@ -255,9 +275,15 @@ def segment_cv_blocks(text: str) -> dict[str, str]:
     blocks: dict[str, list[str]] = {k: [] for k in block_keys}
     current = "CONTACT"
     for line in lines:
+        # Some OCR outputs section headers with spaced letters: "C O N T A C T".
+        # Build a normalized header candidate for section detection only.
+        header_candidate = line
+        if re.fullmatch(r"(?:[A-Za-zÀ-ÿ]\s+){3,}[A-Za-zÀ-ÿ]", line):
+            header_candidate = re.sub(r"\s+", "", line)
+
         matched = False
         for pattern, section in _SECTION_MAP:
-            if pattern.search(line) and len(line) < 80:
+            if pattern.search(header_candidate) and len(header_candidate) < 80:
                 current = section
                 matched = True
                 break
