@@ -69,8 +69,8 @@ def _consume_loop(ocr_engine: OcrEngine, llm_extractor: LlmExtractor) -> None:
     result_queue = os.getenv("CV_RESULT_QUEUE", "cv_result_queue")
     dlq_queue = os.getenv("CV_DLQ_QUEUE", "cv_parse_dlq")
     exchange = os.getenv("CV_EXCHANGE", "cv.exchange")
-    worker_threads = int(os.getenv("RABBITMQ_WORKER_THREADS", os.getenv("CV_WORKER_THREADS", "2")))
-    max_in_flight = int(os.getenv("RABBITMQ_MAX_IN_FLIGHT", os.getenv("CV_MAX_IN_FLIGHT", "2")))
+    worker_threads = int(os.getenv("RABBITMQ_WORKER_THREADS", os.getenv("CV_WORKER_THREADS", "1")))
+    max_in_flight = int(os.getenv("RABBITMQ_MAX_IN_FLIGHT", os.getenv("CV_MAX_IN_FLIGHT", "1")))
 
     credentials = pika.PlainCredentials(user, password)
     params = pika.ConnectionParameters(host=host, port=port, credentials=credentials, heartbeat=600)
@@ -99,7 +99,11 @@ def _consume_loop(ocr_engine: OcrEngine, llm_extractor: LlmExtractor) -> None:
     except Exception:
         confirms_enabled = False
 
-    executor = ThreadPoolExecutor(max_workers=max(1, worker_threads), thread_name_prefix="cv-job")
+    executor: ThreadPoolExecutor | None = None
+    if worker_threads > 1 or max_in_flight > 1:
+        # Concurrency mode (best-effort). Note: pika blocking connection is fragile under
+        # multithreading; prefer worker_threads=1 for maximum reliability.
+        executor = ThreadPoolExecutor(max_workers=max(1, worker_threads), thread_name_prefix="cv-job")
     publish_lock = threading.Lock()
 
     def _publish_json(payload: dict[str, Any]) -> None:
@@ -111,54 +115,62 @@ def _consume_loop(ocr_engine: OcrEngine, llm_extractor: LlmExtractor) -> None:
             if confirms_enabled and ok is False:
                 raise RuntimeError("RabbitMQ publish not confirmed")
 
-    def on_message(ch, method, _, body: bytes) -> None:
-        delivery_tag = method.delivery_tag
-
-        def _work() -> None:
-            correlation_id = ""
-            published = False
-            t0 = time.monotonic()
+    def _process_one(ch, delivery_tag: int, body: bytes) -> None:
+        correlation_id = ""
+        published = False
+        t0 = time.monotonic()
+        try:
+            data = json.loads(body.decode("utf-8"))
+            correlation_id = str(data.get("correlationId", ""))
+            pdf_b64 = data.get("pdfBase64")
+            if not correlation_id or not pdf_b64:
+                raise ValueError("correlationId and pdfBase64 are required")
+            pdf_bytes = base64.b64decode(pdf_b64)
+            result = run_cv_pipeline(pdf_bytes, ocr_engine, llm_extractor)
+            payload = {
+                "correlationId": correlation_id,
+                "status": "ok",
+                "result": result.model_dump(by_alias=True),
+                "error": None,
+            }
+            _publish_json(payload)
+            published = True
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            logger.info("CV parse completed correlationId=%s elapsed_ms=%s", correlation_id, elapsed_ms)
+        except Exception as exc:
+            logger.exception("Parse job failed: %s", exc)
+            err_payload = {
+                "correlationId": correlation_id,
+                "status": "error",
+                "result": None,
+                "error": str(exc),
+            }
             try:
-                data = json.loads(body.decode("utf-8"))
-                correlation_id = str(data.get("correlationId", ""))
-                pdf_b64 = data.get("pdfBase64")
-                if not correlation_id or not pdf_b64:
-                    raise ValueError("correlationId and pdfBase64 are required")
-                pdf_bytes = base64.b64decode(pdf_b64)
-                result = run_cv_pipeline(pdf_bytes, ocr_engine, llm_extractor)
-                payload = {
-                    "correlationId": correlation_id,
-                    "status": "ok",
-                    "result": result.model_dump(by_alias=True),
-                    "error": None,
-                }
-                _publish_json(payload)
+                _publish_json(err_payload)
                 published = True
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
-                logger.info("CV parse completed correlationId=%s elapsed_ms=%s", correlation_id, elapsed_ms)
-            except Exception as exc:
-                logger.exception("Parse job failed: %s", exc)
-                err_payload = {
-                    "correlationId": correlation_id,
-                    "status": "error",
-                    "result": None,
-                    "error": str(exc),
-                }
+                logger.info("CV parse errored correlationId=%s elapsed_ms=%s", correlation_id, elapsed_ms)
+            except Exception:
+                logger.exception("Failed to publish error result")
+        finally:
+            if published:
                 try:
-                    _publish_json(err_payload)
-                    published = True
-                    elapsed_ms = int((time.monotonic() - t0) * 1000)
-                    logger.info("CV parse errored correlationId=%s elapsed_ms=%s", correlation_id, elapsed_ms)
+                    ch.basic_ack(delivery_tag=delivery_tag)
                 except Exception:
-                    logger.exception("Failed to publish error result")
-            finally:
-                if published:
-                    connection.add_callback_threadsafe(lambda: ch.basic_ack(delivery_tag=delivery_tag))
-                else:
-                    # Publish failed (likely broker issue). Don't ack so message can be retried.
-                    connection.add_callback_threadsafe(lambda: ch.basic_nack(delivery_tag=delivery_tag, requeue=True))
+                    pass
+            else:
+                # Publish failed (likely broker issue). Don't ack so message can be retried.
+                try:
+                    ch.basic_nack(delivery_tag=delivery_tag, requeue=True)
+                except Exception:
+                    pass
 
-        executor.submit(_work)
+    def on_message(ch, method, _, body: bytes) -> None:
+        delivery_tag = method.delivery_tag
+        if executor is None:
+            _process_one(ch, delivery_tag, body)
+            return
+        executor.submit(lambda: connection.add_callback_threadsafe(lambda: _process_one(ch, delivery_tag, body)))
 
     channel.basic_consume(queue=parse_queue, on_message_callback=on_message, auto_ack=False)
     consumer_ready.set()
@@ -168,7 +180,8 @@ def _consume_loop(ocr_engine: OcrEngine, llm_extractor: LlmExtractor) -> None:
     finally:
         consumer_ready.clear()
         try:
-            executor.shutdown(wait=False, cancel_futures=True)
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=True)
         except Exception:
             pass
         try:

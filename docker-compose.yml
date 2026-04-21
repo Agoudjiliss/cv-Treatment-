@@ -83,6 +83,8 @@ services:
       OMP_NUM_THREADS: "2"
       MKL_NUM_THREADS: "2"
       OPENBLAS_NUM_THREADS: "2"
+      # Avoid slow model host connectivity checks during OCR init.
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
       RABBITMQ_PREFETCH: "2"
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
@@ -124,7 +126,11 @@ services:
       OMP_NUM_THREADS: "2"
       MKL_NUM_THREADS: "2"
       OPENBLAS_NUM_THREADS: "2"
-      RABBITMQ_PREFETCH: "2"
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
+      # Reliability-first: avoid pika multithreading issues and Ollama overload.
+      RABBITMQ_PREFETCH: "1"
+      RABBITMQ_WORKER_THREADS: "1"
+      RABBITMQ_MAX_IN_FLIGHT: "1"
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
       OLLAMA_NUM_PREDICT: "2048"
