@@ -77,6 +77,73 @@ _LANG_NORMALIZE = {
     "polish": "POLISH", "czech": "CZECH", "romanian": "ROMANIAN",
 }
 
+_LANG_TOKEN_RE = re.compile(
+    r"\b("
+    r"english|anglais|french|fran[çc]ais|arabic|arabe|spanish|espagnol|espa[ñn]ol|"
+    r"italian|italien|german|allemand|portuguese|portugais|"
+    r"chinese|chinois|mandarin|dutch|n[eé]erlandais|"
+    r"russian|russe|turkish|turc|japanese|japonais|"
+    r"korean|cor[eé]en|hindi|persian|farsi|urdu"
+    r")\b",
+    re.IGNORECASE | re.UNICODE,
+)
+_CEFR_RE = re.compile(r"\b(A1|A2|B1|B2|C1|C2)\b", re.IGNORECASE)
+_NATIVE_RE = re.compile(
+    r"\b(native|natif|langue\s+maternelle|mother\s+tongue|bilingue|bilingual)\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_lang_token(token: str) -> str:
+    t = token.strip().lower()
+    local_map = {
+        "anglais": "english",
+        "français": "french",
+        "francais": "french",
+        "arabe": "arabic",
+        "espagnol": "spanish",
+        "español": "spanish",
+        "espanol": "spanish",
+        "italien": "italian",
+        "allemand": "german",
+        "portugais": "portuguese",
+        "chinois": "chinese",
+        "néerlandais": "dutch",
+        "neerlandais": "dutch",
+        "russe": "russian",
+        "turc": "turkish",
+        "japonais": "japanese",
+        "coréen": "korean",
+        "coreen": "korean",
+    }
+    t = local_map.get(t, t)
+    return _LANG_NORMALIZE.get(t, t.upper())
+
+
+def _extract_language_proficiencies(raw_text: str) -> list[LanguageProficiency]:
+    """Parse language + proficiency pairs from OCR text lines."""
+    if not raw_text:
+        return []
+    out: list[LanguageProficiency] = []
+    seen: set[str] = set()
+    for ln in (x.strip() for x in raw_text.splitlines() if x.strip()):
+        # Skip spaced-letter section headers like "L A N G U E S".
+        if re.fullmatch(r"(?:[A-Za-zÀ-ÿ]\s+){3,}[A-Za-zÀ-ÿ]", ln):
+            continue
+        tokens = _LANG_TOKEN_RE.findall(ln)
+        if not tokens:
+            continue
+        cefr = _CEFR_RE.search(ln)
+        is_native = _NATIVE_RE.search(ln) is not None
+        prof = "NATIVE" if is_native else (cefr.group(1).upper() if cefr else None)
+        for tok in tokens:
+            lang = _normalize_lang_token(tok)
+            if not lang or lang in seen:
+                continue
+            seen.add(lang)
+            out.append(LanguageProficiency(language=lang, proficiency=prof))
+    return out
+
 
 def _detect_native_languages(raw_text: str) -> set[str]:
     """Return language keys that appear on or near a 'mother tongue' line."""
@@ -107,6 +174,11 @@ def _filter_languages_by_evidence(cv: CvExtractionResult, raw_text: str) -> None
     This reduces LLM hallucinations like ENGLISH/FRENCH when CV lists ITALIAN/SPANISH.
     If we have no evidence at all, we keep the model output unchanged.
     """
+    extracted = _extract_language_proficiencies(raw_text)
+    if extracted:
+        cv.languages = extracted
+        return
+
     detected, native = _evidence_languages(raw_text)
     if not detected:
         return
